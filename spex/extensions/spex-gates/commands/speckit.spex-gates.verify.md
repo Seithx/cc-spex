@@ -135,9 +135,9 @@ fi
 
 **If the gate passes** (exit code 0, or script not found, or no spec dir): proceed to the next step.
 
-### 0a. Smoke Test Reminder
+### 0a. Walkthrough Reminder
 
-Before running verification, check if the spec has acceptance scenarios and whether a smoke test has been recorded:
+Before running verification, check if the spec has acceptance scenarios and whether a walkthrough has been recorded:
 
 ```bash
 # Check if spec has acceptance scenarios
@@ -153,22 +153,22 @@ if [ -n "$SPEC_FILE" ] && [ -f "$SPEC_FILE" ]; then
   HAS_SCENARIOS=$(grep -c '\*\*Given\*\*' "$SPEC_FILE" 2>/dev/null || echo 0)
 fi
 
-# Check if smoke test was recorded
-SMOKE_TEST_DONE=false
+# Check if a walkthrough was recorded
+WALKTHROUGH_DONE=false
 if [ -f ".specify/.spex-state" ]; then
-  SMOKE_TEST_DONE=$(jq -r '.smoke_test_completed // false' .specify/.spex-state 2>/dev/null)
+  WALKTHROUGH_DONE=$(jq -r '.smoke_test_completed // false' .specify/.spex-state 2>/dev/null)
 fi
 ```
 
-**If the spec has acceptance scenarios AND no smoke test was recorded** (`HAS_SCENARIOS` > 0 AND `SMOKE_TEST_DONE` is not `true`):
+**If the spec has acceptance scenarios AND no walkthrough was recorded** (`HAS_SCENARIOS` > 0 AND `WALKTHROUGH_DONE` is not `true`):
 
 Display a reminder (informational only, does NOT block verification):
 ```
-NOTE: Acceptance scenarios exist but no smoke test was recorded.
-Consider running `/speckit-spex-smoke-test` first to validate runtime behavior.
+NOTE: Acceptance scenarios exist but no walkthrough was recorded.
+Consider running `/speckit-spex-walkthrough` first to validate runtime behavior.
 ```
 
-**If a smoke test was recorded** or **no acceptance scenarios exist**: proceed silently.
+**If a walkthrough was recorded** or **no acceptance scenarios exist**: proceed silently.
 
 ### 1. Run Tests
 

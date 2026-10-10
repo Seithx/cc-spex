@@ -1,9 +1,9 @@
 ---
-description: "Smoke test + squash + merge/keep (land the code on main)"
-argument-hint: "[--auto] [--no-smoke-test] [--skip-archive]"
+description: "Walkthrough + squash + merge/keep (land the code on main)"
+argument-hint: "[--auto] [--no-walkthrough] [--skip-archive]"
 ---
 
-# Finish - Smoke Test, Squash, and Land the Code
+# Finish - Walkthrough, Squash, and Land the Code
 
 ## Ship Pipeline Guard
 
@@ -29,17 +29,17 @@ In autonomous mode: suppress all interactive prompts, UNLESS running inside a wo
 Parse the following flags from arguments:
 
 - If `--auto` is passed, set `AUTO_MODE=true`. This suppresses all interactive prompts and uses defaults (same behavior as the ship pipeline's autonomous mode).
-- If `--no-smoke-test` is passed, set `SKIP_SMOKE_TEST=true`. This bypasses the smoke test gate unconditionally.
+- If `--no-walkthrough` is passed, set `SKIP_WALKTHROUGH=true`. This bypasses the walkthrough gate unconditionally.
 - If `--skip-archive` is passed, set `SKIP_ARCHIVE=true`. This skips the archive step when spex-detach is enabled.
 
 ```bash
 AUTO_MODE=false
-SKIP_SMOKE_TEST=false
+SKIP_WALKTHROUGH=false
 SKIP_ARCHIVE=false
 for arg in "$@"; do
   case "$arg" in
     --auto) AUTO_MODE=true ;;
-    --no-smoke-test) SKIP_SMOKE_TEST=true ;;
+    --no-walkthrough) SKIP_WALKTHROUGH=true ;;
     --skip-archive) SKIP_ARCHIVE=true ;;
   esac
 done
@@ -55,7 +55,7 @@ done
 - For each remaining hook, do **not** attempt to interpret or evaluate hook `condition` expressions:
   - If the hook has no `condition` field, or it is null/empty, treat the hook as executable
   - If the hook defines a non-empty `condition`, skip the hook and leave condition evaluation to the HookExecutor implementation
-- Convert hook command names from dot notation to hyphen notation for slash command invocation (e.g., `speckit.spex.smoke-test` becomes `/speckit-spex-smoke-test`)
+- Convert hook command names from dot notation to hyphen notation for slash command invocation (e.g., `speckit.spex.walkthrough` becomes `/speckit-spex-walkthrough`)
 - Determine prompt behavior based on autonomous mode: when `.specify/.spex-state` exists with `ask` of `smart` or `never`, optional hooks execute without prompting (treated as mandatory). When `ask` is `"always"` or no state file exists, optional hooks prompt as normal.
 - For each executable hook, output the following based on its `optional` flag:
   - **Optional hook** (`optional: true`) in interactive mode:
@@ -84,60 +84,63 @@ done
   - If a mandatory hook fails or is declined by the user, STOP. Output an error message indicating which hook failed and do NOT proceed to Phase 1.
 - If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently
 
-## Phase 1: Smoke Test Gate
+## Phase 1: Walkthrough Gate
 
-This phase checks whether a smoke test has been run and is current, then decides whether to run one before proceeding.
+This phase checks whether a walkthrough has been run and is current, then decides whether to run one before proceeding. The walkthrough is advisory: a FAIL is recorded but does not hard-block finishing (the reviewer decides).
 
-### Step 1: Check for `--no-smoke-test` flag
+### Step 1: Check for `--no-walkthrough` flag
 
 ```bash
-if [ "$SKIP_SMOKE_TEST" = true ]; then
-  echo "Smoke test skipped (--no-smoke-test flag)."
+if [ "$SKIP_WALKTHROUGH" = true ]; then
+  echo "Walkthrough skipped (--no-walkthrough flag)."
   # Proceed to Phase 2
 fi
 ```
 
-### Step 2: Read smoke test state
+### Step 2: Read walkthrough state
 
 ```bash
-SHIP_STATE_SCRIPT=".specify/extensions/spex/scripts/spex-ship-state.sh"
-SMOKE_COMPLETED=false
-SMOKE_COMMIT_HASH=""
+WALKTHROUGH_COMPLETED=false
+WALKTHROUGH_COMMIT_HASH=""
 
 if [ -f ".specify/.spex-state" ]; then
-  SMOKE_COMPLETED=$(jq -r '.smoke_test_completed // false' .specify/.spex-state 2>/dev/null)
-  SMOKE_COMMIT_HASH=$(jq -r '.smoke_test_commit_hash // empty' .specify/.spex-state 2>/dev/null)
+  WALKTHROUGH_COMPLETED=$(jq -r '.smoke_test_completed // false' .specify/.spex-state 2>/dev/null)
+  WALKTHROUGH_COMMIT_HASH=$(jq -r '.smoke_test_commit_hash // empty' .specify/.spex-state 2>/dev/null)
 fi
 ```
 
-### Step 3: Evaluate smoke test freshness
+The `.smoke_test_completed` / `.smoke_test_commit_hash` state keys are retained for
+backward compatibility with existing ship-state plumbing; they now record the
+walkthrough's completion.
 
-**If smoke test passed and HEAD matches recorded commit hash:** Skip with message.
+### Step 3: Evaluate walkthrough freshness
+
+**If the walkthrough ran and HEAD matches recorded commit hash:** Skip with message.
 ```bash
 CURRENT_HEAD=$(git rev-parse HEAD)
-if [ "$SMOKE_COMPLETED" = "true" ] && [ "$SMOKE_COMMIT_HASH" = "$CURRENT_HEAD" ]; then
-  echo "Smoke test previously passed at this commit. Skipping."
+if [ "$WALKTHROUGH_COMPLETED" = "true" ] && [ "$WALKTHROUGH_COMMIT_HASH" = "$CURRENT_HEAD" ]; then
+  echo "Walkthrough previously completed at this commit. Skipping."
   # Proceed to Phase 2
 fi
 ```
 
-**If smoke test passed but HEAD differs from recorded hash:** Warn about staleness.
+**If the walkthrough ran but HEAD differs from recorded hash:** Warn about staleness.
 ```bash
-if [ "$SMOKE_COMPLETED" = "true" ] && [ "$SMOKE_COMMIT_HASH" != "$CURRENT_HEAD" ]; then
-  COMMITS_SINCE=$(git rev-list --count "$SMOKE_COMMIT_HASH"..HEAD 2>/dev/null || echo "unknown")
-  echo "WARNING: Smoke test passed at commit ${SMOKE_COMMIT_HASH:0:8} but $COMMITS_SINCE commit(s) added since."
+if [ "$WALKTHROUGH_COMPLETED" = "true" ] && [ "$WALKTHROUGH_COMMIT_HASH" != "$CURRENT_HEAD" ]; then
+  COMMITS_SINCE=$(git rev-list --count "$WALKTHROUGH_COMMIT_HASH"..HEAD 2>/dev/null || echo "unknown")
+  echo "WARNING: Walkthrough completed at commit ${WALKTHROUGH_COMMIT_HASH:0:8} but $COMMITS_SINCE commit(s) added since."
 fi
 ```
 
 Present the user with a choice:
-- **"Re-run smoke test"**: Invoke `/speckit-spex-smoke-test`, then record result with current HEAD
+- **"Re-run walkthrough"**: Invoke `/speckit-spex-walkthrough`, then record the result with current HEAD
 - **"Skip and proceed"**: Continue without re-running
 
-In autonomous mode: skip the stale smoke test (proceed without re-running).
+In autonomous mode: skip the stale walkthrough (proceed without re-running).
 
-**If smoke test never run:** Invoke `/speckit-spex-smoke-test` interactively.
+**If the walkthrough never ran:** Invoke `/speckit-spex-walkthrough`. In autonomous/unattended mode (`--auto`, or `ask` is `never`) the walkthrough self-detects the unattended pipeline, writes a deferred `WALKTHROUGH.md`, and returns without waiting for a verdict; in interactive mode it runs the full loop. After it returns, record its completion with the current HEAD so later finish runs recognize it ran.
 
-If the smoke test fails (any scenario does not pass), STOP. The user must fix issues and re-run `/speckit-spex-finish`.
+The walkthrough is advisory (FR-021a): a recorded FAIL does NOT hard-block finishing. It completes, writes `WALKTHROUGH.md`, and returns; the reviewer decides whether to fix (via the walkthrough's retry loop) or proceed knowingly.
 
 ## Phase 2: Context Detection
 

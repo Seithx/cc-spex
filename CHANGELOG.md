@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Renamed `speckit-spex-smoke-test` to `speckit-spex-walkthrough`** ("Guided Walkthrough / pair testing"), with the report artifact renamed from `SMOKE-TEST.md` to `WALKTHROUGH.md` and the finish flag from `--no-smoke-test` to `--no-walkthrough`. The walkthrough now synthesizes scenarios from the spec's user stories in priority order, sets up a persistent (gitignored, never auto-deleted) run workspace, previews every command before running it, opens the real artifact inline, and pauses for the reviewer's verdict. It is advisory (a FAIL is recorded but never hard-blocks `finish`/`ship`), reports uncovered requirements as orphans instead of dropping them, removes the old observable/internal keyword auto-skip, and skips only when there are genuinely no stories and no scenarios. Deterministic work (workspace lifecycle, coverage/orphan/skip computation, no-placeholder lint) moves into `spex-walkthrough-workspace.sh`, `spex-walkthrough-coverage.py`, and `spex-walkthrough-lint.sh`. Cross-references in `finish`, `ship`, `deep-review`, the help docs, and the README were updated.
+
 ## [6.0.0] - 2026-10-09
 
 Version 6 makes spex agent-harness-agnostic. Setup moves from Claude Code plugin initialization to spec-kit's workflow system, so the same spec-driven workflow runs on Claude Code, Codex, and OpenCode. See [Migrating from v5.x to v6.x](README.md#migrating-from-v5x-to-v6x) for upgrade guidance.

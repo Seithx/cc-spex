@@ -349,9 +349,9 @@ These commands are provided by spex extensions and available after `/spex:init`.
 | `/speckit-spex-gates-review-spec` | spex-gates | Validate spec (fires automatically via hook) |
 | `/speckit-spex-gates-review-plan` | spex-gates | Review plan (fires automatically via hook) |
 | `/speckit-spex-gates-review-code` | spex-gates | Review code compliance (fires automatically via hook), includes spec-declared constants drift check |
-| `/speckit-spex-smoke-test` | spex | Guided Demo: synthesizes user-observable flows from spec FRs, triages infrastructure (full/partial/setup offered/manual), presents evidence humans can evaluate. Uses `## Smoke Test` as priority hints. Auto-skips when all FRs are internal-only. Writes SMOKE-TEST.md with FR coverage mapping. Always interactive |
+| `/speckit-spex-walkthrough` | spex | Guided Walkthrough (pair testing): synthesizes scenarios from the spec's user stories (priority order), sets up a persistent real environment, previews each command before running it, opens the real artifact inline, and pauses for the reviewer's verdict. Advisory (never hard-blocks). Reports orphan FRs, skips only when there are no stories and no scenarios. Writes WALKTHROUGH.md. Always interactive |
 | `/speckit-spex-submit` | spex | Push and create PR for team review. Runs verification, commits outstanding changes, creates PR with spec-linked body and REVIEWERS.md. `--watch`: monitor CI, auto-fix failures, triage review comments |
-| `/speckit-spex-finish` | spex | Smoke test + squash + merge/keep (land the code). Runs smoke test gate, squashes commits with conventional commit message, merges or keeps. When spex-detach enabled: archives specs to sibling repo. `--no-smoke-test`: skip smoke test gate |
+| `/speckit-spex-finish` | spex | Walkthrough + squash + merge/keep (land the code). Runs the advisory walkthrough gate, squashes commits with conventional commit message, merges or keeps. When spex-detach enabled: archives specs to sibling repo. `--no-walkthrough`: skip the walkthrough gate |
 | `/speckit-spex-gates-stamp` | spex-gates | Verification only (use finish for full flow) |
 | `/speckit-spex-deep-review-review` | spex-deep-review | Multi-perspective code review with 5 agents |
 | `/speckit-spex-worktrees-manage` | spex-worktrees | List, create, or clean up git worktrees |
@@ -412,7 +412,7 @@ When the `spex-worktrees` extension is enabled, the ship pipeline automatically 
 After the pipeline completes, you choose what to do:
 
 - **Submit PR**: run `/speckit-spex-submit` to push and create a PR for team review
-- **Merge directly**: run `/speckit-spex-finish` to smoke test, squash, and merge to main
+- **Merge directly**: run `/speckit-spex-finish` to walk through, squash, and merge to main
 - **Test first**: leaves everything as-is for manual testing
 
 If worktrees are not enabled, the pipeline works in-place on the feature branch (existing behavior).

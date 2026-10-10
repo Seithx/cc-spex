@@ -1,6 +1,6 @@
 # Brainstorm Overview
 
-Last updated: 2026-10-04
+Last updated: 2026-10-09
 
 ## Sessions
 
@@ -21,6 +21,7 @@ Last updated: 2026-10-04
 | 44 | 2026-08-02 | extract-cc-review | active | - | [#50](https://github.com/rhuss/cc-spex/issues/50) |
 | 45 | 2026-08-02 | data-pipeline-hygiene | active | - | [#49](https://github.com/rhuss/cc-spex/issues/49) |
 | 46 | 2026-10-04 | mechanical-compliance-gate | idea | - | - |
+| 47 | 2026-10-09 | guided-walkthrough-pair-testing (supersedes #43) | ready for spec | - | - |
 
 ## Open Threads
 

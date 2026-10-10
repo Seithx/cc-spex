@@ -1,4 +1,4 @@
-.PHONY: validate install uninstall reinstall check-upstream test-hook test-install test-install-remote test-setup-profile test-workflow-setup test-generated-trees release migrate sync-scripts sync-scripts-check help
+.PHONY: validate install uninstall reinstall check-upstream test-hook test-install test-install-remote test-setup-profile test-workflow-setup test-generated-trees test-walkthrough release migrate sync-scripts sync-scripts-check help
 
 MARKETPLACE := spex-plugin-development
 PLUGIN := spex@$(MARKETPLACE)
@@ -22,6 +22,11 @@ test-workflow-setup:
 
 test-generated-trees:
 	@tests/test_generated_trees.sh
+
+test-walkthrough:
+	@tests/test_walkthrough_workspace.sh
+	@tests/test_walkthrough_coverage.sh
+	@tests/test_walkthrough_lint.sh
 
 migrate:
 	@# Remove old sdd plugin and marketplace from pre-3.0.0 installations
@@ -111,7 +116,7 @@ release: validate sync-scripts-check test-install
 	echo "Release v$$VERSION complete. VERSION bumped to $$NEXT_VERSION."
 
 # Script inventory: which canonical scripts (in spex/scripts/) belong to which extensions
-SCRIPTS_spex := spex-flow-state.sh spex-ship-state.sh spex-ship-state.py spex-ship-statusline.sh spex-finish-context.sh spex-worktree-cwd.sh
+SCRIPTS_spex := spex-flow-state.sh spex-ship-state.sh spex-ship-state.py spex-ship-statusline.sh spex-finish-context.sh spex-worktree-cwd.sh spex-walkthrough-workspace.sh spex-walkthrough-coverage.py spex-walkthrough-lint.sh
 SCRIPTS_spex_gates := spex-flow-state.sh spex-closeout-gate.sh
 SCRIPTS_spex_collab := spex-flow-state.sh
 SCRIPTS_spex_deep_review := spex-flow-state.sh detect-cc-review.sh

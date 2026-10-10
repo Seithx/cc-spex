@@ -833,7 +833,7 @@ After deep review passes, tell the user:
 
 ```
 Deep review complete. To close out this feature:
-  1. /speckit-spex-smoke-test    (walk through acceptance scenarios)
+  1. /speckit-spex-walkthrough   (pair-test the feature against a real environment)
   2. /clear                      (free context for final gate)
   3. /speckit-spex-finish         (verify + merge/PR, all-in-one)
 ```

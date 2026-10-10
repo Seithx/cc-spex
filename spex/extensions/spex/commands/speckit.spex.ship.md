@@ -788,7 +788,7 @@ After `PIPELINE_COMPLETE`, the pipeline is done. Present the user with a choice 
 
 **CRITICAL: Stay on the feature branch.** Do NOT switch to main, do NOT run `git checkout`, do NOT clean up worktrees, and do NOT remove the state file at this point. The user must choose how to proceed first. Branch switching only happens inside `/speckit-spex-finish` if the user selects "Merge directly".
 
-**Do NOT check for smoke test scenarios, do NOT announce smoke test phases, do NOT spawn smoke test subagents.** The smoke test runs inside `/speckit-spex-finish` via the `before_finish` hook. The post-pipeline prompt is ONLY the choice below.
+**Do NOT check for walkthrough scenarios, do NOT announce walkthrough phases, do NOT spawn walkthrough subagents.** The walkthrough runs inside `/speckit-spex-finish` via the `before_finish` hook. The post-pipeline prompt is ONLY the choice below.
 
 1. Output a one-line summary, then IMMEDIATELY {harness:interactive-choice}:
 
@@ -799,7 +799,7 @@ After `PIPELINE_COMPLETE`, the pipeline is done. Present the user with a choice 
    - multiSelect: false
    - Options:
      - "Submit PR (Recommended)": "Push branch and create a pull request for team review"
-     - "Merge directly": "Run /speckit-spex-finish to smoke test, squash, and merge to main"
+     - "Merge directly": "Run /speckit-spex-finish to walk through, squash, and merge to main"
      - "Stop here": "Do nothing now. Run /speckit-spex-submit or /speckit-spex-finish later"
 
    {harness:interactive-choice-must} Do NOT output the options as text and wait for a free-form reply.
@@ -831,7 +831,7 @@ After `PIPELINE_COMPLETE`, the pipeline is done. Present the user with a choice 
 
    When ready:
      /speckit-spex-submit    Push and create PR
-     /speckit-spex-finish    Smoke test + squash + merge to main
+     /speckit-spex-finish    Walkthrough + squash + merge to main
    ```
 
 5. **STOP.**

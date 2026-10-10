@@ -171,20 +171,20 @@ spex COMMANDS (helpers and configuration)
                                        --resume, --start-from <stage>
                                 Worktree: auto-creates if spex-worktrees enabled
                                 8 stages, then completion prompt (submit PR / merge / stop)
-  /speckit-spex-smoke-test    Guided Demo: synthesize user-observable flows from spec FRs,
-                                triage infrastructure, present evidence humans can evaluate
-                                Reads FRs as primary input, ## Smoke Test as priority hints
-                                Four-tier triage: full, partial, setup offered, manual
-                                Auto-skips when all FRs are internal-only (unit-test verified)
-                                Writes SMOKE-TEST.md with FR coverage mapping
+  /speckit-spex-walkthrough   Guided Walkthrough (pair testing): story-anchored scenarios
+                                in priority order, against a persistent real environment
+                                Previews each command, opens the real artifact, pauses for verdict
+                                Advisory (never hard-blocks); agent drives, reviewer can take over
+                                Reports orphan FRs; skips only when no stories and no scenarios
+                                Writes WALKTHROUGH.md with story + FR coverage mapping
                                 Always interactive (even in ship pipeline, even --ask never)
   /speckit-spex-submit        Push and create PR for team review
                                 Flags: --watch
                                 --watch: monitor CI after PR, auto-fix failures,
                                          triage comments (if spex-collab enabled)
-  /speckit-spex-finish        Smoke test + squash + merge/keep (land the code)
-                                Flags: --no-smoke-test
-                                Runs smoke test gate, squashes commits with
+  /speckit-spex-finish        Walkthrough + squash + merge/keep (land the code)
+                                Flags: --no-walkthrough
+                                Runs the advisory walkthrough gate, squashes commits with
                                 conventional commit message, merges or keeps
   /speckit-spex-review-spec   Check spec quality and completeness
   /speckit-spex-review-plan   Validate plan coverage, task quality, red flags
@@ -202,19 +202,19 @@ CLOSING OUT A FEATURE (after review passes)
     1. /speckit-spex-submit          Push and create PR for team review
        /speckit-spex-submit --watch  Same, plus monitor CI and triage comments
     2. (PR review and approval happen externally)
-    3. /speckit-spex-finish          Smoke test + squash + merge
+    3. /speckit-spex-finish          Walkthrough + squash + merge
 
   Direct merge path (solo or small fixes):
-    1. /speckit-spex-finish          Smoke test + squash + merge to main
+    1. /speckit-spex-finish          Walkthrough + squash + merge to main
 
   /speckit-spex-submit verifies code, commits outstanding changes,
   creates (or pushes to) a PR with spec-linked body and REVIEWERS.md.
   Watch mode polls CI, auto-fixes failures, and triages review comments.
 
-  /speckit-spex-finish checks the smoke test gate (runs it if needed,
-  skips if already passed at current commit), squashes all commits into
+  /speckit-spex-finish checks the walkthrough gate (runs it if needed,
+  skips if already completed at current commit), squashes all commits into
   one with a conventional commit message, and merges to main with
-  worktree cleanup. Use --no-smoke-test to skip the gate.
+  worktree cleanup. Use --no-walkthrough to skip the gate.
 
   Extensions are managed via the specify CLI:
     specify extension enable <name>    Enable an extension
@@ -333,7 +333,7 @@ BACKPRESSURE CONFIGURATION (.specify/extensions/spex/spex-config.yml)
   Mid-impl review checkpoints at 1/3 and 2/3 (requires spex-deep-review, 3+ tasks).
   Agent leaderboard with MVP shown after every deep review run.
   Ship Stage 8 presents a choice: submit PR, merge directly, or stop.
-  The smoke test is now a gate inside /speckit-spex-finish (not a pipeline stage).
+  The walkthrough is now a gate inside /speckit-spex-finish (not a pipeline stage).
   Watch mode runs during /speckit-spex-submit (with --watch flag).
   Watch monitors CI, auto-fixes failures (max 2 attempts), and triages
   review comments when spex-collab is enabled.

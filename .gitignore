@@ -79,6 +79,9 @@ build/
 !**/.specify/memory/constitution.md
 .playwright-mcp/
 
+# spex walkthrough: persistent run workspaces (kept on disk, never committed)
+specs/**/.walkthrough/
+
 # AI tool / dev artifacts
 **/.claude/
 **/.codex/
