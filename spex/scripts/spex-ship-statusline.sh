@@ -233,17 +233,31 @@ render_flow() {
     fi
   fi
 
-  # Smoke test indicator (shown when smoke test results exist in state)
-  local gate_st=""
-  local smoke_completed
-  smoke_completed=$(echo "$STATE_JSON" | jq -r '.smoke_test_completed | tostring' 2>/dev/null)
-  if [ "$smoke_completed" = "true" ]; then
-    gate_st="${GREEN}ST ✓${RESET}"
-  elif [ "$smoke_completed" = "false" ]; then
-    local st_done st_total
-    st_done=$(echo "$STATE_JSON" | jq -r '.smoke_test_scenarios // 0' 2>/dev/null)
-    st_total=$(echo "$STATE_JSON" | jq -r '.smoke_test_total // 0' 2>/dev/null)
-    gate_st="${YELLOW}ST ${st_done}/${st_total}${RESET}"
+  # Walkthrough indicator (WT), derived from runbook status for the feature.
+  # Hidden when no runbook exists. Resolve the status script next to this one.
+  local gate_wt=""
+  local RUNBOOK_STATUS
+  RUNBOOK_STATUS="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spex-runbook-status.sh"
+  if [ -x "$RUNBOOK_STATUS" ] && [ -n "$spec_dir" ]; then
+    local proj_root wt_json wt_exists wt_status
+    proj_root=$(dirname "$(dirname "$STATE_FILE")")
+    wt_json=$("$RUNBOOK_STATUS" show "$proj_root/$spec_dir" --no-git 2>/dev/null)
+    wt_exists=$(echo "$wt_json" | jq -r '.exists' 2>/dev/null)
+    if [ "$wt_exists" = "true" ]; then
+      wt_status=$(echo "$wt_json" | jq -r '.status' 2>/dev/null)
+      case "$wt_status" in
+        passed)  gate_wt="${GREEN}WT ✓${RESET}" ;;
+        failed)  gate_wt="${RED}WT ✗${RESET}" ;;
+        in_progress)
+          local wt_total wt_pending wt_done
+          wt_total=$(echo "$wt_json" | jq -r '.steps.total' 2>/dev/null)
+          wt_pending=$(echo "$wt_json" | jq -r '.steps.pending' 2>/dev/null)
+          wt_done=$((wt_total - wt_pending))
+          gate_wt="${YELLOW}WT ${wt_done}/${wt_total}${RESET}"
+          ;;
+        drafted) gate_wt="${DIM}WT ◌${RESET}" ;;
+      esac
+    fi
   fi
 
   # Build output
@@ -251,8 +265,8 @@ render_flow() {
   if [ -n "$gate_t" ]; then
     gate_section="${gate_section} ${gate_t}"
   fi
-  if [ -n "$gate_st" ]; then
-    gate_section="${gate_section} ${gate_st}"
+  if [ -n "$gate_wt" ]; then
+    gate_section="${gate_section} ${gate_wt}"
   fi
   printf "🧬 ${CYAN}${BOLD}spex${RESET}${marks} ${DIM}|${RESET} ${gate_section}"
   if [ "$all_done" = true ]; then

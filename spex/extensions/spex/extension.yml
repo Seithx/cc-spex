@@ -48,7 +48,7 @@ provides:
       description: "Create flow state for step-by-step SDD workflow tracking"
     - name: speckit.spex.walkthrough
       file: commands/speckit.spex.walkthrough.md
-      description: "Guided Walkthrough (pair testing): story-anchored, agent-driven walkthrough against a real environment with runnable, reproducible evidence"
+      description: "Try the feature: a testability check, a tutorial-style RUNBOOK.md (why, exact command, what you should see), and a co-pilot session that runs it with you. Drafts a runbook for later via ship; light and full fixture modes; advisory, never blocks"
     - name: speckit.spex.clear
       file: commands/speckit.spex.clear.md
       description: "Clear spex state: dismiss status line, remove stale flow/ship artifacts"

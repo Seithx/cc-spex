@@ -1,339 +1,430 @@
 ---
-description: "Guided Walkthrough (pair testing): story-anchored, agent-driven walkthrough against a real environment with runnable, reproducible evidence"
+description: "Try the feature: a testability check, a tutorial-style RUNBOOK.md, and a co-pilot session that runs it with you"
+argument-hint: "[<feature>] [--draft] [--force [what to try]] [--no-git]"
 ---
 
-# Guided Walkthrough (speckit-spex-walkthrough)
+# Walkthrough - Try the Feature with a Runbook
 
 ## Overview
 
-Pair-test a completed feature with the reviewer. You (the agent) are the **navigator**: you synthesize scenarios from the spec's user stories, set up a real environment, and for each step you preview the exact command, run it, open the real artifact it produced, and pause. The reviewer is the **driver-of-record**: they judge each step from evidence they can see and reproduce, and they can take over any step at will.
+The point of this command is **trust through trying the feature**. It writes a
+tutorial-style `RUNBOOK.md`: one end-to-end journey a person can follow to see
+the feature actually work, where every step says why it matters, the exact
+command to run, and what you should see before you run it. Then it runs that
+runbook with you as a co-pilot: for each step you either run the command
+yourself (it lands on your clipboard) or let the agent run it with full
+transparency (the exact command, the real output, and an expected-versus-actual
+comparison).
 
-The whole point is to put a human in contact with real, running behavior and catch the class of gaps that unit tests and code review structurally cannot. That only works if every verdict is backed by an artifact the reviewer can inspect and a command they can re-run verbatim. So this skill never narrates a summary in place of real output, and never presents a command the reviewer cannot copy and run.
-
-Scenarios come from the spec's **user stories** (in priority order), with each story's Given/When/Then acceptance scenarios as the backbone. Functional requirements are mapped onto the steps that exercise them; requirements no scenario touches are reported as **orphans**, never dropped. The walkthrough is **advisory**: a FAIL is recorded but never hard-blocks `finish` or `ship` (FR-021a).
-
-Results are persisted as `WALKTHROUGH.md` in the spec directory, written on every exit path.
+If nothing can be tried by hand, this command says so in one line and writes no
+files. It never fabricates output, never presents a command you cannot copy and
+run, and never hard-blocks `finish` or `ship`.
 
 ### Deterministic helpers (Constitution VII)
 
-The deterministic work lives in three scripts; this skill delegates to them and never re-implements their logic inline:
-
-- `spex-walkthrough-workspace.sh <spec-dir> [--new]` — create/resolve the persistent run workspace; prints `WORKSPACE_PATH <abs>`; never deletes (FR-007/008/009).
-- `spex-walkthrough-coverage.py <spec-file> --json` — user stories in priority order, their scenarios, FR→story coverage, orphan FRs, and the skip gate (FR-003/004/006).
-- `spex-walkthrough-lint.sh <file-or-dir>` — fail if any presented/reported command contains a placeholder token (FR-010/025).
-
-Resolve each script from the extension's installed `scripts/` dir, falling back to the canonical repo path:
+All state, freshness, structure checks, fixture lifecycle, and clipboard access
+live in scripts. This command delegates to them and never re-implements their
+logic inline. Resolve each from the extension's installed `scripts/` directory,
+falling back to the canonical repo path:
 
 ```bash
-WS_SCRIPT=".specify/extensions/spex/scripts/spex-walkthrough-workspace.sh"
-COV_SCRIPT=".specify/extensions/spex/scripts/spex-walkthrough-coverage.py"
-LINT_SCRIPT=".specify/extensions/spex/scripts/spex-walkthrough-lint.sh"
-[ -f "$WS_SCRIPT" ]  || WS_SCRIPT="spex/scripts/spex-walkthrough-workspace.sh"
-[ -f "$COV_SCRIPT" ] || COV_SCRIPT="spex/scripts/spex-walkthrough-coverage.py"
-[ -f "$LINT_SCRIPT" ] || LINT_SCRIPT="spex/scripts/spex-walkthrough-lint.sh"
+STATUS=".specify/extensions/spex/scripts/spex-runbook-status.sh"
+CHECK=".specify/extensions/spex/scripts/spex-runbook-check.sh"
+FIXTURE=".specify/extensions/spex/scripts/spex-runbook-fixture.sh"
+CLIP=".specify/extensions/spex/scripts/spex-runbook-clip.sh"
+[ -f "$STATUS" ]  || STATUS="spex/scripts/spex-runbook-status.sh"
+[ -f "$CHECK" ]   || CHECK="spex/scripts/spex-runbook-check.sh"
+[ -f "$FIXTURE" ] || FIXTURE="spex/scripts/spex-runbook-fixture.sh"
+[ -f "$CLIP" ]    || CLIP="spex/scripts/spex-runbook-clip.sh"
 ```
+
+The runbook path always comes from `"$STATUS" locate`. Never guess it, and never
+edit `.gitignore` or `.git/info/exclude` (the scratch folder ignores itself).
 
 <HARD-GATE>
-## No Simulated Tests
+## Never Fabricate Evidence
 
-You MUST NOT simulate, fake, or hand-reproduce what the system under test would do. Every step must exercise the actual system (run the real command, call the real API, invoke the real skill). If a step cannot be genuinely executed by either party, record it honestly as **skipped** or **manual** with real reasoning, never as a pass. If a step runs without full infrastructure, present the real proxy evidence (dry-run output, request payloads, logs) with an explicit **partial-evidence disclaimer** stating what it does and does not prove (FR-016).
-
-A simulated step that edits files to mimic system output is worse than no step. It creates false confidence.
+You MUST NOT simulate, summarize, or hand-write what the system would do. Every
+step runs the real command or the real action. If a step cannot be genuinely run
+by either party, record it as `skipped` with an honest reason, never as a pass.
+Before any command output is written into the runbook, redact credentials to
+`[redacted]` (FR-028).
 </HARD-GATE>
 
-<HARD-GATE>
-## Always Interactive
+## Command forms
 
-The walkthrough is ALWAYS interactive and ALWAYS requires a human, regardless of the pipeline's `--ask` level (FR-022). No `--ask never` can auto-pass a step. When no human is available (an unattended pipeline), you do not fake the walkthrough: you skip it with a clear "manual walkthrough required" notice, record every scenario as **deferred**, write the report, and let the pipeline continue (see Unattended Pipeline below). You never block indefinitely or fail the stage.
-</HARD-GATE>
+| Form | Behavior |
+|---|---|
+| `/speckit-spex-walkthrough` | Feature from the current branch. Existing runbook: run or resume. None: testability check, draft, then run. |
+| `/speckit-spex-walkthrough --draft` | Testability check and draft only. No fixtures, no steps. Used by `ship`. |
+| `/speckit-spex-walkthrough --force [what to try]` | Skip a "not testable" verdict and draft anyway, covering the given hint. |
+| `/speckit-spex-walkthrough <feature>` | `<feature>` is a number prefix (`054`) or a spec directory name. Runs that runbook from any branch. |
+| on the default branch, no feature argument | Picker over `"$STATUS" list` entries with status `drafted`, `in_progress`, or `failed`. |
 
-<HARD-GATE>
-## Mandatory Report
+Flags combine: `<feature> --draft`, `<feature> --force`.
 
-You MUST write `WALKTHROUGH.md` and output the results report on EVERY exit path, including honest skips, early exits, and unattended pipeline runs (FR-021, SC-004). A walkthrough whose results a human never sees is worthless.
-</HARD-GATE>
+---
 
-## Prerequisites
+## Phase 1: Resolve feature and runbook
 
-### Spec resolution
-
-```bash
-PREREQS=$(.specify/scripts/bash/check-prerequisites.sh --json --paths-only 2>/dev/null)
-FEATURE_DIR=$(echo "$PREREQS" | jq -r '.FEATURE_DIR')
-SPEC_FILE="$FEATURE_DIR/spec.md"
-```
-
-If the spec cannot be resolved, report the error and exit (no report needed; there is no feature to walk).
-
-### Pipeline and attendance detection
-
-```bash
-PIPELINE_MODE=false
-ASK="always"
-if [ -f ".specify/.spex-state" ]; then
-  STATUS=$(jq -r '.status // empty' .specify/.spex-state 2>/dev/null)
-  ASK=$(jq -r '.ask // "always"' .specify/.spex-state 2>/dev/null)
-  [ "$STATUS" = "running" ] && PIPELINE_MODE=true
-fi
-# Unattended = running inside a pipeline with no human to answer (ask never).
-UNATTENDED=false
-if [ "$PIPELINE_MODE" = true ] && [ "$ASK" = "never" ]; then
-  UNATTENDED=true
-fi
-```
-
-In pipeline mode, complete the walkthrough and return without a "Shall I proceed?" prompt. Never suppress the results report.
-
-## Step 1: Synthesize scenarios from user stories (FR-001, FR-002, FR-005)
-
-Run the coverage helper and read its JSON. Do NOT classify requirements as "observable" vs "internal-only" and do NOT auto-skip on that basis — that keyword heuristic is removed (FR-005).
-
-```bash
-COVERAGE=$(python3 -I "$COV_SCRIPT" "$SPEC_FILE" --json)
-SKIP=$(echo "$COVERAGE" | jq -r '.skip')
-```
-
-The JSON gives you, in user-story priority order:
-
-- `stories[]`: `{id, title, priority, scenarios[], frs[]}`
-- `fr_coverage`: `{FR-NNN: [US...]}`
-- `orphan_frs`: FRs no story-derived scenario exercises (FR-004)
-
-Build one walkthrough scenario per user story, **in the order the script returns them** (P1 first). For each, turn the story's Given/When/Then acceptance scenarios into steps (FR-002):
-
-- **Given** → environment setup for the scenario
-- **When** → the driven action(s)
-- **Then** → the inspection and the reviewer's judgment
-
-### Honest skip gate (FR-006)
-
-If `SKIP` is `true` (no user stories AND no acceptance scenarios), there is genuinely nothing to walk. Write a skip report (Step 6) recording the reason and the orphan FRs, display it, and exit. In pipeline mode, return so the pipeline proceeds.
-
-## Step 2: Set up the real environment (FR-007, D4)
-
-Create the persistent run workspace and keep its path for every command and the report:
-
-```bash
-WS_OUT=$(bash "$WS_SCRIPT" "$FEATURE_DIR" --new)
-# Strip the "WORKSPACE_PATH " prefix only — do NOT split on whitespace, so a
-# workspace path that contains spaces (common on macOS, e.g. ~/My Project/...)
-# is preserved intact.
-WS_LINE=$(printf '%s\n' "$WS_OUT" | grep '^WORKSPACE_PATH ')
-WORKSPACE=${WS_LINE#WORKSPACE_PATH }
-echo "Run workspace: $WORKSPACE"
-```
-
-`$WORKSPACE` is a real, gitignored directory that persists after the run. Use it for every file a step creates, so every command you present carries a concrete path (no placeholders). Always wrap it in double quotes (`"$WORKSPACE"`) in every command.
-
-Immediately write a skeleton report so an abnormal exit still leaves a truthful record (FR-021, SC-004):
-
-```bash
-# After Step 1 synthesis + workspace creation, write WALKTHROUGH.md with every
-# synthesized scenario marked INCOMPLETE and the full Coverage section populated
-# from the Step 1 JSON. Each scenario verdict overwrites its INCOMPLETE marker as
-# the loop progresses, and Step 5 finalizes the report.
-```
-
-For app startup and browser steps, **reuse the `/run` skill** when available (do not re-implement project-type detection). When it is not available, degrade to delegated manual steps (Step 4). If you start an app, **persist its PID and port to the workspace** so cleanup (Step 7) works even though each command runs in a fresh shell:
-
-```bash
-# After the app is up, record PID and port in the run workspace:
-printf '%s %s\n' "$APP_PID" "$APP_PORT" > "$WORKSPACE/.app.pid"
-# If /run does not surface a PID, discover it by the port the app listens on:
-#   APP_PID=$(lsof -ti :"$APP_PORT" 2>/dev/null)
-# If neither a PID nor lsof is available, tell the reviewer the exact process/port
-# to stop manually rather than silently skipping cleanup.
-```
-
-**Stale process on a known port**: before starting an app, if a process already holds the port, ask before killing it (it may be unrelated work) rather than assuming it is yours.
-
-## Step 3: The walkthrough loop (FR-011, FR-011a, FR-012, FR-013)
-
-For each scenario (priority order), announce it, then for each step:
-
-1. **Infer the concrete command** from the step's acceptance criteria (Given/When/Then) plus the repository's conventions — entry points, README, Makefile, and the `/run` skill when available (FR-011a). There is no author-declared command list; the command preview is the safeguard against mis-inference.
-
-2. **Preview the exact command before running it** (FR-011). Show it verbatim, with the real `$WORKSPACE` path and concrete arguments — never a placeholder like `<scratch>`, `<path>`, or `/path/to/`:
-
-   ```
-   ### Step N: <intent from Given/When/Then>
-   About to run:
-       <exact runnable command>
-   ```
-
-3. **Run it yourself** (default), then **open the resulting artifact inline** (FR-012): file contents, a log excerpt, a directory tree, or a screenshot. Show the real output, do not narrate a summary of it.
-
-4. **State expected vs actual**, quoting the spec's requirement or acceptance scenario for "expected":
-
-   ```
-   - Command: `<exact runnable command>`
-   - Ran by: agent
-   - Expected: <from spec>
-   - Actual: <what the artifact shows>
-   - Artifact: <path or inline excerpt>
-   ```
-
-   For a step run without full infrastructure, add a **partial-evidence disclaimer** (FR-016): what the proxy evidence proves and what it cannot.
-
-5. **Pause and wait for the reviewer's judgment before the next step** (FR-013). Present a verdict choice (your evidence-based recommendation first):
-   - **Pass** — behavior matches
-   - **Fail** — does not match (triggers the retry loop, Step 3b)
-   - **Skip** — cannot verify now
-   - **Run manually** — reviewer will drive it
-
-When all steps of a scenario are judged, record the **scenario verdict** (pass / fail / skip / manual / deferred) with optional per-step notes, and record **who ran each step** (agent or reviewer) (FR-017).
-
-### Step 3a: Delegation and takeover (FR-014, FR-015)
-
-**Delegate** a step to the reviewer — present the exact command and wait for their observation — when you cannot run it yourself. Delegation triggers include at least:
-
-- infrastructure you cannot provision
-- interactive terminal (TUI) programs
-- required external credentials
-- GUI / visual judgment
-- any action outside the execution sandbox
-
-**Takeover**: the reviewer may claim any step at any time. When they do, yield, show the command, and wait for their result. Record the step's execution mode as reviewer-ran in both cases.
-
-Never fake a delegated step's result. If neither party can run it, record it as skip/manual with honest reasoning (No Simulated Tests gate).
-
-### Step 3b: Fail → investigate → fix → retry (FR-018)
-
-When a step's verdict is **fail**:
-
-1. Offer to investigate (analyze the artifact, compare expected vs actual, read the relevant source/logs/config).
-2. If a cause is found, offer to apply a fix.
-3. After a fix, offer to retry the step from scratch with fresh evidence.
-4. Record both the initial failure and the retry outcome.
-5. **At most 2 retries per scenario.** After two unsuccessful retries, record the failure and move on.
-
-A FAIL is advisory: it is recorded, it does not hard-block `finish`/`ship` (FR-021a). The reviewer decides whether to fix or proceed knowingly.
-
-## Step 4: Unattended pipeline (FR-022)
-
-If `UNATTENDED` is true (pipeline with `ask never`, no human present):
-
-- Do NOT run the interactive loop.
-- Print a clear **"manual walkthrough required"** notice.
-- Record every synthesized scenario with verdict **deferred**.
-- Write `WALKTHROUGH.md` (Step 5) and display it.
-- Return so the pipeline continues. Do not block, do not fail the stage.
-
-## Step 5: Write the report (FR-019, FR-020, FR-021)
-
-Write `$FEATURE_DIR/WALKTHROUGH.md`, scenario-anchored and ordered by user-story priority. Overwrite any previous report (each run is a fresh validation). Required structure:
-
-```markdown
-# Walkthrough Report
-
-**Feature**: <name from spec title>
-**Date**: <YYYY-MM-DD>
-**Workspace**: <absolute workspace path>   (remove with: `rm -rf <absolute workspace path>`)
-**Result**: N passed, M failed, K skipped, J manual, D deferred
-
-## Scenario 1: <title> (P1, from US1)
-**Verdict**: PASS
-### Step 1: <intent>
-- Command: `<exact runnable command>`
-- Ran by: agent | reviewer
-- Expected: <...>
-- Actual: <...>
-- Artifact: <path or excerpt>
-<partial-evidence disclaimer, if any>
-...
-
-## Coverage
-### User stories
-| Story | Scenario | Verdict |
-| US1 | Scenario 1 | PASS |
-### Functional requirements
-| FR | Covered by | Verdict |
-| FR-001 | Scenario 1 | PASS |
-### Orphan FRs
-- FR-030 (not covered by any scenario)
-```
-
-Every FR from the spec MUST appear here either as covered (with its scenario) or as an orphan — none silently absent (FR-020, SC-005). Pull `fr_coverage` and `orphan_frs` from the Step 1 JSON.
-
-### Enforce persistence and no placeholders (FR-009, FR-010, FR-025)
-
-Before finalizing:
-
-1. Print the workspace path and the exact cleanup command (`rm -rf <absolute workspace path>`). Do NOT auto-delete the workspace; only stop any app process you started (Step 7).
-2. Run the lint gate over the report and fail-closed on any placeholder:
+1. Determine the spec directory:
+   - If `<feature>` is given, resolve it to `specs/<dir>` by exact directory
+     name or by number prefix (`054` matches `specs/054-...`).
+   - Otherwise, derive it from the current branch (`NNN-feature-name`).
+   - On the default branch with no `<feature>` and no runbook for the current
+     context, run `"$STATUS" list` and present a picker over entries whose status
+     is `drafted`, `in_progress`, or `failed` (FR-030). Resolve the chosen one.
+2. Resolve the runbook path and scratch folder:
 
    ```bash
-   bash "$LINT_SCRIPT" "$FEATURE_DIR/WALKTHROUGH.md"
+   LOC=$("$STATUS" locate "$SPEC_DIR" --create)
+   RUNBOOK=$(printf '%s' "$LOC" | jq -r .runbook)
+   SCRATCH=$(printf '%s' "$LOC" | jq -r .scratch)
+   RELOCATED=$(printf '%s' "$LOC" | jq -r .relocated)
    ```
 
-   If it prints `WALKTHROUGH_LINT_FAIL`, a presented/reported command still has a placeholder. Resolve it to the concrete value actually used and rewrite the report before finishing (SC-003).
+   If `RELOCATED` is `true`, tell the user the runbook lives at `$RUNBOOK`
+   (inside the self-ignoring scratch folder) and why (detach mode keeps it out of
+   git) (FR-038).
+3. Read current status: `"$STATUS" show "$SPEC_DIR"`.
+   - `exists: true` and status `in_progress`: go to **Resume** (Phase 6).
+   - `exists: true` and status `drafted`, `failed`, or `passed`: offer to run or
+     rerun, then go to Phase 4.
+   - `exists: false`: continue to Phase 2.
+   - **Freshness (FR-031).** When running a previously drafted runbook, check
+     `changed_since_draft` and `current` from `show`. If the code changed since
+     the draft, list the `changed_files` (or show `changed_files_note` when the
+     drafted commit is gone) and offer two choices: **refresh the affected
+     steps** (re-read the diff, update the steps the change touches, then
+     `"$STATUS" steps` if the count changed) or **run as is**. Never silently run
+     a stale runbook.
+4. **Unattended detection.** Treat the session as unattended when `ship` state
+   (`.specify/.spex-state`) has `status: running` with `ask: never`, or when
+   `finish` invoked the walkthrough with its auto option. When unattended, run
+   phases 1 to 3 only and never prompt.
 
-## Step 6: Skip report
+---
 
-For the honest-skip gate (Step 1, `skip: true`) or an unattended run, write the same `WALKTHROUGH.md` with:
+## Phase 2: Testability check (FR-001)
 
-- **Result**: Skipped (no user stories and no acceptance scenarios) — or — Deferred (unattended pipeline, manual walkthrough required)
-- Each scenario (if any) listed with verdict SKIP or DEFERRED and the reason
-- The Coverage section still listing every FR as covered-or-orphan
+Skip this phase when a runbook already exists or when `--force` was given.
 
-This satisfies SC-004 (a report on every exit) and still runs the lint gate.
+Judge whether a person could try the feature by hand. Draw on the spec, the
+plan, `quickstart.md`, and the branch diff. There are three outcomes:
 
-## Step 7: Cleanup (processes only — never the workspace)
+- **Testable**: there is a user-observable effect (a command's output, a file it
+  writes, an API response, a page that renders). Continue to Phase 3.
+- **Partly testable**: some parts can be tried, others cannot. Draft a runbook
+  for the testable parts and list the rest under `## Not covered here` with
+  reasons (FR-003).
+- **Not testable**: the change is internal only (a refactor, a build-wiring
+  change, a docs edit with no runnable effect). Print **one line** with the
+  reason and the override hint, record it, and stop. Write no runbook and no
+  scratch files (FR-002):
 
-**Applies at ANY exit point**, not just success.
-
-- If you started an app process, stop it. Read the persisted PID/port (independent of in-memory shell state) and escalate SIGTERM → wait up to 5s → SIGKILL:
-
-  ```bash
-  if [ -f "$WORKSPACE/.app.pid" ]; then
-    read -r APP_PID APP_PORT < "$WORKSPACE/.app.pid"
-    kill -TERM "$APP_PID" 2>/dev/null
-    sleep 5
-    kill -0 "$APP_PID" 2>/dev/null && kill -KILL "$APP_PID" 2>/dev/null
-    rm -f "$WORKSPACE/.app.pid"
-  fi
+  ```text
+  Not testable by hand: this change only restructures internal helpers with no user-visible effect. To try it anyway: /speckit-spex-walkthrough --force [what to try]
   ```
 
-  Report the outcome. If no PID file exists and `lsof` is unavailable, tell the reviewer which process/port to stop manually rather than silently skipping.
-- If the reviewer started the app manually, do NOT stop it.
-- **Never delete the run workspace or its artifacts** (FR-009). It persists for reproduction; the report prints the cleanup command for the reviewer to run when they choose.
+  Then run `"$STATUS" not-testable "$SPEC_DIR"` and stop.
 
-## Step 8: Results display (MANDATORY on every exit)
+**`--force [what to try]`** skips the verdict entirely and drafts a runbook,
+covering the hint the user gave after `--force` (FR-002a).
 
-After cleanup, always print the results to the console (including pipeline and unattended mode):
+---
+
+## Phase 3: Draft the runbook (FR-004 to FR-008)
+
+Write `RUNBOOK.md` as **one end-to-end journey in real-user order**: the steps a
+person would actually take, start to finish, to exercise the feature. Do not
+group by user story or by requirement; weave them into the natural order and tag
+each step with the story it exercises.
+
+Write the body with exactly these sections (structure enforced by
+`spex-runbook-check.sh`):
+
+1. `# Try it: <feature title>`
+2. `## What you're testing` - a short overview and the order of the journey (FR-004).
+3. `## Test environment` - one entry per fixture (filled in Phase 5). If there
+   are no fixtures, say so.
+4. `## Steps` - the `### Step N of M: <title> (US<k>)` blocks (FR-004a, FR-005).
+5. `## Not covered here` - parts that cannot be tried, with reasons (FR-003).
+   Omit this section when empty.
+6. `## Coverage` - which user stories the journey covers and which it does not,
+   with reasons (FR-004a).
+7. `## Results` - left empty; written at wrap-up.
+
+**Step anatomy** (exactly as the data model; the check enforces the required
+parts):
+
+```markdown
+### Step N of M: <title> (US<k>)
+
+**Why this step:** <purpose in plain words>
+
+**Needs:** <earlier steps or fixtures, if any>
+
+**Run:**
 
 ```
-═══════════════════════════════════════════════════════
-WALKTHROUGH RESULTS
-═══════════════════════════════════════════════════════
-
-Feature: <name>
-Date: <YYYY-MM-DD>
-Status: <COMPLETE | SKIPPED | DEFERRED (unattended) | INCOMPLETE (early exit)>
-Workspace: <absolute path>   (remove with: rm -rf <absolute path>)
-
-Scenarios:
-  1. <verdict> <title> [P1, US1]   steps: agent-ran X, reviewer-ran Y
-     <one-line evidence pointer>
-  ...
-
-Coverage: <C> FRs covered, <O> orphan(s): FR-030, ...
-Summary: N passed, M failed, K skipped, J manual, D deferred
-Full report: <path to WALKTHROUGH.md>
-
-═══════════════════════════════════════════════════════
+<the exact command>
 ```
 
-In pipeline mode, still suppress "Shall I proceed?" and next-step suggestions, but NEVER suppress this report.
+**What you should see:** <written before running the command (FR-006)>
 
-## Integration
+**If you see something else:** <symptom to likely meaning>
 
-**Invoked by:**
-- Users directly via `/speckit-spex-walkthrough`
-- The finish command via `/speckit-spex-finish` (the walkthrough gate)
-- The ship pipeline via `/speckit-spex-ship` (which routes the walkthrough through finish)
+**Result:**
+```
 
-**Invokes:**
-- `.specify/scripts/bash/check-prerequisites.sh` (spec resolution)
-- `spex-walkthrough-workspace.sh`, `spex-walkthrough-coverage.py`, `spex-walkthrough-lint.sh` (deterministic helpers)
-- Optionally: the `/run` skill (app startup) and Playwright MCP (browser steps)
+Rules while drafting:
+
+- **Prerequisites become their own steps.** If a step needs a logged-in session,
+  a built binary, or a running service, add an explicit earlier step for it.
+- **Capture runtime values with commands**, never with a placeholder. If a step
+  needs an ID or URL produced earlier, show the command that reads it (for
+  example `kubectl get route ... -o jsonpath=...`), not `<the-url>`.
+- **GUI or browser steps use `**Do:**`** with a short ordered list instead of
+  `**Run:**` with a fenced block.
+- Write `**What you should see:**` **before** you would ever run the command, so
+  it is a genuine expectation and not a copy of the output (FR-006).
+
+After writing the body:
+
+```bash
+"$STATUS" init "$RUNBOOK" --feature "$(basename "$SPEC_DIR")" --mode <light|full> --steps <N>
+```
+
+Then loop until clean:
+
+```bash
+"$CHECK" "$RUNBOOK"
+```
+
+Fix every `RUNBOOK_CHECK_FAIL` line (missing step section, step count mismatch,
+placeholder inside a command block, or an unredacted secret) and re-run until it
+prints `RUNBOOK_CHECK_PASS`. If you change the number of steps, call
+`"$STATUS" steps "$RUNBOOK" <N>` so the count stays in sync.
+
+**Mode is chosen by the heaviest fixture the journey needs (FR-011):**
+
+- **light**: no fixtures, or only quick ones (a background process, a podman
+  container, a podman compose stack).
+- **full**: any slow local fixture (a long build, a local cluster) or any remote
+  or paid fixture.
+
+Set it with the `--mode` flag on `init`, or later with
+`"$STATUS" mode "$RUNBOOK" full` (upgrades only; a downgrade after a step has a
+result is rejected, FR-014).
+
+**When `--draft` was given, stop here.** Report the drafted runbook path, the
+step count, and the mode. Do not approve, set up fixtures, or run steps.
+
+---
+
+## Phase 4: Approve (light mode)
+
+(Full mode adds a review pause and tiered consent; see Phase 4b below.)
+
+In light mode, ask **one** question that approves the runbook and sets up the
+quick fixtures together (FR-012, FR-017):
+
+{harness:interactive-choice} (single-select, header: "Walkthrough"):
+
+**"Runbook drafted: <N> steps, light mode. Fixtures needed: <list, or 'none'>. Start them and run the walkthrough?"**
+
+1. **"Run it"**: "Start the quick fixtures and begin the step session"
+2. **"Draft only"**: "Keep the runbook, do not run anything now"
+
+If the user chooses "Draft only", stop after reporting the path.
+
+---
+
+## Phase 5: Test environment (light mode)
+
+1. **Discover fixtures** the journey needs from the runbook steps, the spec, the
+   plan, and `quickstart.md` (FR-015).
+2. **Reuse first.** Before starting anything, check whether a needed service is
+   already up (a reachable port, an existing container, an active login). If so,
+   record it and do not start a duplicate (FR-016).
+3. **Start quick fixtures** with the fixture script:
+
+   ```bash
+   "$FIXTURE" start "$SCRATCH" --name <name> --kind process -- <command...>
+   "$FIXTURE" start "$SCRATCH" --name <name> --kind container -- podman run -d <image> <args...>
+   "$FIXTURE" start "$SCRATCH" --name <name> --kind compose --file <compose-file>
+   ```
+
+   Containers use **podman** only.
+4. **If `start` exits 4** (container runtime unavailable), report it with the
+   command to start the runtime (for example `podman machine start`), then offer
+   to **skip** the affected steps or **hand them over** for the user to run.
+5. **If the user declines a fixture**, mark every step that needs it skipped and
+   say why:
+
+   ```bash
+   "$STATUS" step "$RUNBOOK" <n> skipped
+   ```
+
+   Note the reason in that step's `**Result:**`.
+6. **Write `## Test environment`** from `"$FIXTURE" status "$SCRATCH"`: one entry
+   per fixture with how it was set up, who started it (agent or user), and its
+   teardown command (FR-009).
+
+---
+
+## Phase 4b/5b: Full mode (review pause, tiered consent)
+
+When the mode is `full`:
+
+1. **Review pause before anything runs (FR-013).** Show the drafted journey and
+   the fixtures it needs. Let the user change or drop steps. After edits, keep
+   the count in sync with `"$STATUS" steps "$RUNBOOK" <N>`.
+2. **Tiered consent, per fixture (FR-017, FR-018):**
+   - **quick**: covered by the single light-mode approval.
+   - **slow local** (a long build, a local cluster): state the time estimate and
+     ask before starting.
+   - **remote or paid** (a cloud cluster, a hosted service): state what will be
+     created, how long it runs, and any possible cost, and require an explicit
+     yes. If the user prefers, hand over the exact commands for them to run
+     instead of running them.
+3. **Record external fixtures** (anything not started by the fixture script) so
+   the environment section and cleanup stay complete:
+
+   ```bash
+   "$FIXTURE" record "$SCRATCH" --name <name> --tier <slow|remote> --owner <agent|user> --teardown "<command>" --note "<how it was set up>"
+   ```
+
+4. Keep `## Test environment` in sync with `fixtures.json` (FR-009).
+5. **Upgrade to full** mid-session if a light setup turns out heavy:
+   `"$STATUS" mode "$RUNBOOK" full`. Never downgrade (FR-014).
+
+---
+
+## Phase 6: Step session
+
+Work through the steps in order. For each step, first show its `**Why**`, the
+exact command (or the `**Do:**` list), and `**What you should see:**`. Then offer:
+
+{harness:interactive-choice} (single-select, header: "Step <n>"):
+
+1. **"Run it yourself"**: pipe the exact command to the clipboard and let the
+   user run it:
+
+   ```bash
+   printf '%s' "<exact command>" | "$CLIP"
+   ```
+
+   On `CLIP_OK` tell them it is on the clipboard. On exit 3 (`CLIP_UNAVAILABLE`),
+   just show the command to copy (FR-022).
+2. **"Let the agent run it"**: run it with full transparency (see below). **Omit
+   this choice, with the reason,** when the agent cannot do the step: a browser
+   step with no browser automation tool connected, another GUI, an interactive
+   terminal program, an action needing user-only credentials, or an action
+   outside the sandbox (FR-021).
+3. **"Run the rest"**: run every remaining agent-runnable step without pausing,
+   stopping at the first mismatch, the first user-only step, or the next consent
+   point.
+4. **"Skip"**: record the step as `skipped` with a reason.
+
+### Agent-run transparency (FR-023, FR-023a, FR-024)
+
+When the agent runs a step:
+
+1. Print the exact command before running it.
+2. Show the **real output in full** up to about 40 lines. If it is longer, save
+   it to `"$SCRATCH/step-<n>.log"` and quote only the verbatim lines that matter.
+3. Give an **expected-versus-actual** comparison, one line per observation, in
+   this format:
+
+   ```text
+   Running: <exact command>
+
+   <full output, or: Output: 212 lines, saved to specs/054-x/.walkthrough/step-3.log>
+
+   Expected vs actual:
+     ✔ "Plan written to .sandcast/build/openshell/plan.yaml"
+         → line 41: Plan written to .sandcast/build/openshell/plan.yaml
+     ✘ "Components already in the base marked skip"
+         → found: all 18 components marked install (lines 12 to 29)
+   ```
+
+**Browser steps** are driven by a connected browser automation tool (such as
+Playwright MCP, when connected), with screenshots saved under the scratch folder
+as the evidence (FR-021a). If no such tool is connected, offer "Run it yourself"
+only.
+
+### Recording results (FR-027)
+
+Record each result the moment it is known, before moving on:
+
+```bash
+"$STATUS" step "$RUNBOOK" <n> <passed|failed|skipped>
+```
+
+Then fill that step's `**Result:**` with the verdict, who ran it, the
+expected-versus-actual comparison, and the quoted output lines or the log path.
+**Redact credentials to `[redacted]` before writing any output into the runbook
+(FR-028).**
+
+---
+
+## Phase 7: Mismatch handling (FR-025, FR-026)
+
+When actual does not match expected, offer:
+
+1. **Investigate**: look closer (read logs, inspect state) without changing anything.
+2. **Fix and retry**: only when you have identified a concrete cause. Make the
+   fix, then rerun the step. There is **no retry limit**; a step may be retried
+   as many times as progress is being made.
+3. **Record and continue**: mark it `failed` with what was observed, and move on.
+4. **Stop**: end the session here.
+
+If the mismatch reveals that the runbook itself was wrong (an expectation that
+never made sense, a command with a typo), correct the step text and note the
+correction in that step's `**Result:**` (FR-026).
+
+---
+
+## Phase 8: Wrap-up
+
+1. Write `## Results`: a short summary of what passed, failed, and was skipped,
+   and what a reader now knows the feature does.
+2. Stop the quick fixtures:
+
+   ```bash
+   "$FIXTURE" stop "$SCRATCH" --quick
+   ```
+
+   In full mode, offer **keep or teardown** for each slow and remote fixture,
+   with **keep as the default**, and make sure its teardown command is recorded
+   (FR-019). Mark kept fixtures with `"$FIXTURE" keep "$SCRATCH" --name <name>`.
+3. Run the final check: `"$CHECK" "$RUNBOOK"`, and fix anything it reports.
+4. Give the closing summary in the chat: the status, the step tally, and the
+   runbook path.
+
+### Commit offer (FR-030a)
+
+**Only on the default branch, and never in detach mode or an unattended
+session**, offer once to commit the updated runbook with a prepared message:
+
+```text
+docs(<number>): walkthrough results
+```
+
+Never push. Do not offer this on a feature branch (the branch's own commits
+cover it) or when the runbook lives in the self-ignoring scratch folder.
+
+---
+
+## Resume
+
+When Phase 1 found `status: in_progress`:
+
+1. Offer to continue from the first `pending` step.
+2. Offer to restart any stopped quick fixtures (`"$FIXTURE" status "$SCRATCH"`
+   shows their state).
+3. Before reusing a kept slow or remote fixture, check that it is still
+   available; if not, set it up again under the same consent rules.
+
+Then continue the step session (Phase 6).

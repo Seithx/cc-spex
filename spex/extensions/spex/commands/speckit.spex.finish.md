@@ -97,50 +97,40 @@ if [ "$SKIP_WALKTHROUGH" = true ]; then
 fi
 ```
 
-### Step 2: Read walkthrough state
+### Step 2: Resolve the feature and read runbook status
 
 ```bash
-WALKTHROUGH_COMPLETED=false
-WALKTHROUGH_COMMIT_HASH=""
+STATUS=".specify/extensions/spex/scripts/spex-runbook-status.sh"
+[ -f "$STATUS" ] || STATUS="spex/scripts/spex-runbook-status.sh"
 
-if [ -f ".specify/.spex-state" ]; then
-  WALKTHROUGH_COMPLETED=$(jq -r '.smoke_test_completed // false' .specify/.spex-state 2>/dev/null)
-  WALKTHROUGH_COMMIT_HASH=$(jq -r '.smoke_test_commit_hash // empty' .specify/.spex-state 2>/dev/null)
-fi
+FEATURE_DIR=$(jq -r '.spec_dir // empty' .specify/.spex-state 2>/dev/null)
+[ -n "$FEATURE_DIR" ] || FEATURE_DIR="specs/$(git rev-parse --abbrev-ref HEAD)"
+
+SHOW=$("$STATUS" show "$FEATURE_DIR")
+WT_STATUS=$(printf '%s' "$SHOW" | jq -r '.status // "missing"')
+WT_EXISTS=$(printf '%s' "$SHOW" | jq -r '.exists')
+WT_CURRENT=$(printf '%s' "$SHOW" | jq -r '.current')
+WT_TESTED_AT=$(printf '%s' "$SHOW" | jq -r '.tested_at // empty')
 ```
 
-The `.smoke_test_completed` / `.smoke_test_commit_hash` state keys are retained for
-backward compatibility with existing ship-state plumbing; they now record the
-walkthrough's completion.
+When `WT_EXISTS` is `false` and `WT_STATUS` is not `not_testable`, treat the runbook as **missing**.
 
-### Step 3: Evaluate walkthrough freshness
+### Step 3: Apply the finish gate (FR-033, FR-033a)
 
-**If the walkthrough ran and HEAD matches recorded commit hash:** Skip with message.
-```bash
-CURRENT_HEAD=$(git rev-parse HEAD)
-if [ "$WALKTHROUGH_COMPLETED" = "true" ] && [ "$WALKTHROUGH_COMMIT_HASH" = "$CURRENT_HEAD" ]; then
-  echo "Walkthrough previously completed at this commit. Skipping."
-  # Proceed to Phase 2
-fi
-```
+The walkthrough is advisory (FR-033): a recorded FAIL never hard-blocks finishing. Apply the table below using `WT_STATUS`, `WT_CURRENT`, and `AUTONOMOUS_MODE` (from the Ship Pipeline Guard). `--no-walkthrough` has already skipped this phase.
 
-**If the walkthrough ran but HEAD differs from recorded hash:** Warn about staleness.
-```bash
-if [ "$WALKTHROUGH_COMPLETED" = "true" ] && [ "$WALKTHROUGH_COMMIT_HASH" != "$CURRENT_HEAD" ]; then
-  COMMITS_SINCE=$(git rev-list --count "$WALKTHROUGH_COMMIT_HASH"..HEAD 2>/dev/null || echo "unknown")
-  echo "WARNING: Walkthrough completed at commit ${WALKTHROUGH_COMMIT_HASH:0:8} but $COMMITS_SINCE commit(s) added since."
-fi
-```
+| `show` status | Interactive | Unattended (`AUTONOMOUS_MODE` true) |
+|---|---|---|
+| `passed`, `current: true` | Print "Walkthrough passed at `$WT_TESTED_AT`." Proceed. | Same. |
+| `passed`, `current: false` | List `changed_files` and offer **rerun** (`/speckit-spex-walkthrough`) or **continue**. | Print the status and continue. |
+| `in_progress` | Offer **resume** (`/speckit-spex-walkthrough`) or **continue**. | Print the status and continue. |
+| `failed` | Show the failed step and offer **continue** or **stop**. | Print the status and continue. |
+| `drafted` | Offer **run now** (`/speckit-spex-walkthrough`) or **later**. | Print the status and continue. |
+| `not_testable` | Nothing to try by hand. Proceed. | Proceed. |
+| `unreadable` | Report it and offer **rerun** or **continue**. | Print the status and continue. |
+| missing | Run `/speckit-spex-walkthrough` (full session). | Run `/speckit-spex-walkthrough --draft` (draft only, no prompts). |
 
-Present the user with a choice:
-- **"Re-run walkthrough"**: Invoke `/speckit-spex-walkthrough`, then record the result with current HEAD
-- **"Skip and proceed"**: Continue without re-running
-
-In autonomous mode: skip the stale walkthrough (proceed without re-running).
-
-**If the walkthrough never ran:** Invoke `/speckit-spex-walkthrough`. In autonomous/unattended mode (`--auto`, or `ask` is `never`) the walkthrough self-detects the unattended pipeline, writes a deferred `WALKTHROUGH.md`, and returns without waiting for a verdict; in interactive mode it runs the full loop. After it returns, record its completion with the current HEAD so later finish runs recognize it ran.
-
-The walkthrough is advisory (FR-021a): a recorded FAIL does NOT hard-block finishing. It completes, writes `WALKTHROUGH.md`, and returns; the reviewer decides whether to fix (via the walkthrough's retry loop) or proceed knowingly.
+After any walkthrough invocation returns, re-read `"$STATUS" show "$FEATURE_DIR"` so later steps see the updated status, then proceed to Phase 2.
 
 ## Phase 2: Context Detection
 
@@ -357,6 +347,17 @@ fi
 STATE_CLEANED=true
 ACTION_TAKEN="merge"
 
+# Preserve spec artifacts back to the main checkout before removing the worktree.
+# In detach mode the spec dir is git-excluded and exists only in the worktree, so
+# nothing else copies it back; this guards against losing it (FR-039). No-op when
+# detach is off.
+PRESERVE=".specify/extensions/spex/scripts/spex-finish-preserve-specs.sh"
+[ -f "$PRESERVE" ] || PRESERVE="spex/scripts/spex-finish-preserve-specs.sh"
+# Use the Phase 1-resolved FEATURE_DIR (the spec dir finish actually operated on),
+# not a re-derived specs/$CURRENT_BRANCH, so preservation never misses the dir when
+# the spec directory name differs from the branch name.
+"$PRESERVE" "$WORKTREE_PATH" "$MAIN_WORKTREE" "${FEATURE_DIR:-specs/$CURRENT_BRANCH}" || true
+
 git worktree remove "$WORKTREE_PATH" 2>&1
 git branch -d "$CURRENT_BRANCH" 2>&1 || git branch -D "$CURRENT_BRANCH" 2>&1
 ```
@@ -430,7 +431,7 @@ else
 fi
 ```
 
-Then handle worktree cleanup (same prompt-before-cleanup pattern as Option A).
+Then handle worktree cleanup (same prompt-before-cleanup pattern as Option A, including the spec-preservation step with `spex-finish-preserve-specs.sh` before any `git worktree remove`).
 
 ### Option C: Push Clean PR Branch
 

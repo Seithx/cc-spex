@@ -24,9 +24,11 @@ test-generated-trees:
 	@tests/test_generated_trees.sh
 
 test-walkthrough:
-	@tests/test_walkthrough_workspace.sh
-	@tests/test_walkthrough_coverage.sh
-	@tests/test_walkthrough_lint.sh
+	@tests/test_runbook_status.sh
+	@tests/test_runbook_check.sh
+	@tests/test_runbook_fixture.sh
+	@tests/test_runbook_clip.sh
+	@tests/test_finish_preserve_specs.sh
 
 migrate:
 	@# Remove old sdd plugin and marketplace from pre-3.0.0 installations
@@ -116,8 +118,8 @@ release: validate sync-scripts-check test-install
 	echo "Release v$$VERSION complete. VERSION bumped to $$NEXT_VERSION."
 
 # Script inventory: which canonical scripts (in spex/scripts/) belong to which extensions
-SCRIPTS_spex := spex-flow-state.sh spex-ship-state.sh spex-ship-state.py spex-ship-statusline.sh spex-finish-context.sh spex-worktree-cwd.sh spex-walkthrough-workspace.sh spex-walkthrough-coverage.py spex-walkthrough-lint.sh
-SCRIPTS_spex_gates := spex-flow-state.sh spex-closeout-gate.sh
+SCRIPTS_spex := spex-flow-state.sh spex-ship-state.sh spex-ship-state.py spex-ship-statusline.sh spex-finish-context.sh spex-worktree-cwd.sh spex-runbook-status.sh spex-runbook-status.py spex-runbook-check.sh spex-runbook-check.py spex-runbook-fixture.sh spex-runbook-clip.sh spex-finish-preserve-specs.sh
+SCRIPTS_spex_gates := spex-flow-state.sh spex-closeout-gate.sh spex-runbook-status.sh spex-runbook-status.py
 SCRIPTS_spex_collab := spex-flow-state.sh
 SCRIPTS_spex_deep_review := spex-flow-state.sh detect-cc-review.sh
 EXTENSIONS := spex spex-gates spex-collab spex-deep-review

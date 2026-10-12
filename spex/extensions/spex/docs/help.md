@@ -171,21 +171,28 @@ spex COMMANDS (helpers and configuration)
                                        --resume, --start-from <stage>
                                 Worktree: auto-creates if spex-worktrees enabled
                                 8 stages, then completion prompt (submit PR / merge / stop)
-  /speckit-spex-walkthrough   Guided Walkthrough (pair testing): story-anchored scenarios
-                                in priority order, against a persistent real environment
-                                Previews each command, opens the real artifact, pauses for verdict
-                                Advisory (never hard-blocks); agent drives, reviewer can take over
-                                Reports orphan FRs; skips only when no stories and no scenarios
-                                Writes WALKTHROUGH.md with story + FR coverage mapping
-                                Always interactive (even in ship pipeline, even --ask never)
+  /speckit-spex-walkthrough   Try the feature with a tutorial-style RUNBOOK.md
+                                Testability check first: one line, no files, when nothing
+                                can be tried by hand (--force overrides)
+                                Each step says why, the exact command, and what you should see
+                                Co-pilot session: run it yourself (clipboard) or let the agent
+                                run it with full expected-versus-actual output
+                                Light mode (quick fixtures) and full mode (slow/remote, tiered consent)
+                                Writes RUNBOOK.md; advisory (never hard-blocks)
+                                Flags: --draft (draft only, used by ship), --force [what to try],
+                                       <feature> (run a drafted runbook later)
   /speckit-spex-submit        Push and create PR for team review
                                 Flags: --watch
                                 --watch: monitor CI after PR, auto-fix failures,
                                          triage comments (if spex-collab enabled)
-  /speckit-spex-finish        Walkthrough + squash + merge/keep (land the code)
+  /speckit-spex-finish        Walkthrough gate + squash + merge/keep (land the code)
                                 Flags: --no-walkthrough
-                                Runs the advisory walkthrough gate, squashes commits with
-                                conventional commit message, merges or keeps
+                                Reads the runbook status; offers to run or resume it when
+                                not passed, squashes commits, merges or keeps
+                                When spex-detach enabled: preserves the spec dir back to main
+                                before removing the worktree
+  Ship drafts a runbook at the end of the pipeline (/speckit-spex-walkthrough --draft),
+    so the feature can be tried later from the merged branch.
   /speckit-spex-review-spec   Check spec quality and completeness
   /speckit-spex-review-plan   Validate plan coverage, task quality, red flags
   /speckit-spex-review-code   Check code compliance against spec

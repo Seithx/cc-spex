@@ -34,7 +34,7 @@ Verify implementation is complete by running tests AND validating spec complianc
 
 **Key Steps:**
 - **Step 0: Closeout gate** (blocks on unresolved Critical/Important findings)
-- Step 0a: Smoke test reminder
+- Step 0a: Walkthrough reminder (runbook status)
 - Step 1: Run tests (existing behavior)
 - **Step 2: Code hygiene review** (mechanical defect detection)
 - **Step 3: Validate spec compliance** (spec-driven)
@@ -137,38 +137,34 @@ fi
 
 ### 0a. Walkthrough Reminder
 
-Before running verification, check if the spec has acceptance scenarios and whether a walkthrough has been recorded:
+Before running verification, read the runbook status for the feature:
 
 ```bash
-# Check if spec has acceptance scenarios
-SPEC_FILE=""
+STATUS=".specify/extensions/spex-gates/scripts/spex-runbook-status.sh"
+[ -f "$STATUS" ] || STATUS="spex/scripts/spex-runbook-status.sh"
+
+FEATURE_DIR=""
 PREREQS=$(.specify/scripts/bash/check-prerequisites.sh --json --paths-only 2>/dev/null) || true
-if [ -n "$PREREQS" ]; then
-  FEATURE_DIR=$(echo "$PREREQS" | jq -r '.FEATURE_DIR' 2>/dev/null)
-  SPEC_FILE="$FEATURE_DIR/spec.md"
-fi
+[ -n "$PREREQS" ] && FEATURE_DIR=$(echo "$PREREQS" | jq -r '.FEATURE_DIR' 2>/dev/null)
 
-HAS_SCENARIOS=0
-if [ -n "$SPEC_FILE" ] && [ -f "$SPEC_FILE" ]; then
-  HAS_SCENARIOS=$(grep -c '\*\*Given\*\*' "$SPEC_FILE" 2>/dev/null || echo 0)
-fi
-
-# Check if a walkthrough was recorded
-WALKTHROUGH_DONE=false
-if [ -f ".specify/.spex-state" ]; then
-  WALKTHROUGH_DONE=$(jq -r '.smoke_test_completed // false' .specify/.spex-state 2>/dev/null)
+WT_STATUS="missing"
+WT_NOT_TESTABLE=false
+if [ -n "$FEATURE_DIR" ]; then
+  SHOW=$("$STATUS" show "$FEATURE_DIR" 2>/dev/null)
+  WT_STATUS=$(printf '%s' "$SHOW" | jq -r '.status // "missing"')
+  WT_NOT_TESTABLE=$(printf '%s' "$SHOW" | jq -r '.not_testable')
 fi
 ```
 
-**If the spec has acceptance scenarios AND no walkthrough was recorded** (`HAS_SCENARIOS` > 0 AND `WALKTHROUGH_DONE` is not `true`):
+**Remind when there is no runbook, or the runbook is not `passed`, and the feature is not `not_testable`** (`WT_NOT_TESTABLE` is not `true` AND `WT_STATUS` is not `passed`):
 
 Display a reminder (informational only, does NOT block verification):
 ```
-NOTE: Acceptance scenarios exist but no walkthrough was recorded.
-Consider running `/speckit-spex-walkthrough` first to validate runtime behavior.
+NOTE: This feature has not been tried with a runbook (status: <WT_STATUS>).
+Consider running `/speckit-spex-walkthrough` to try the feature before verifying.
 ```
 
-**If a walkthrough was recorded** or **no acceptance scenarios exist**: proceed silently.
+**If the runbook is `passed`** or **the feature is `not_testable`**: proceed silently.
 
 ### 1. Run Tests
 

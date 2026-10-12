@@ -788,11 +788,15 @@ After `PIPELINE_COMPLETE`, the pipeline is done. Present the user with a choice 
 
 **CRITICAL: Stay on the feature branch.** Do NOT switch to main, do NOT run `git checkout`, do NOT clean up worktrees, and do NOT remove the state file at this point. The user must choose how to proceed first. Branch switching only happens inside `/speckit-spex-finish` if the user selects "Merge directly".
 
-**Do NOT check for walkthrough scenarios, do NOT announce walkthrough phases, do NOT spawn walkthrough subagents.** The walkthrough runs inside `/speckit-spex-finish` via the `before_finish` hook. The post-pipeline prompt is ONLY the choice below.
+**Draft the runbook now (FR-032).** Before showing the completion prompt, and at every `ask` level, invoke `/speckit-spex-walkthrough --draft` in the current session. This runs the testability check and writes `RUNBOOK.md` (draft only: no fixtures, no steps) so the feature can be tried later from the merged branch. Do NOT run walkthrough steps or spawn walkthrough subagents here; the interactive session runs later via `/speckit-spex-finish` or `/speckit-spex-walkthrough <number>`. Capture the draft result: either a drafted runbook (path, step count, mode) or a one-line "not testable" verdict with the override hint, and include it in the closing message below.
 
 1. Output a one-line summary, then IMMEDIATELY {harness:interactive-choice}:
 
    Output: `Pipeline complete (8/8 stages passed). Consider running /clear before proceeding to free context.`
+
+   Then, from the draft result captured above, also output one of:
+   - `Runbook drafted: <path> (<n> steps, <mode> mode). Try it now or later with /speckit-spex-walkthrough <number>.`
+   - the one-line not-testable verdict with the override hint.
 
    Then present options to the user:
    - header: "Complete"
