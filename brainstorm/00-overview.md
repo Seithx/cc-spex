@@ -1,6 +1,6 @@
 # Brainstorm Overview
 
-Last updated: 2026-10-09
+Last updated: 2026-10-13
 
 ## Sessions
 
@@ -22,6 +22,8 @@ Last updated: 2026-10-09
 | 45 | 2026-08-02 | data-pipeline-hygiene | active | - | [#49](https://github.com/rhuss/cc-spex/issues/49) |
 | 46 | 2026-10-04 | mechanical-compliance-gate | idea | - | - |
 | 47 | 2026-10-09 | guided-walkthrough-pair-testing (supersedes #43) | ready for spec | - | - |
+| 48 | 2026-10-11 | walkthrough-runbook | ready for spec | 054 | - |
+| 49 | 2026-10-13 | merge-stamp-finish | active | - | - |
 
 ## Open Threads
 
@@ -79,6 +81,14 @@ Last updated: 2026-10-09
 - How to stop the agent from touching the verification marker directly? (from #46)
 - Compliance gate fail-open or strict by default? (from #46)
 - Fallback for specs without numbered FR IDs (from #46)
+- Workspace location: `specs/<feature>/.walkthrough/<timestamp>/` vs a top-level ignored dir (from #47)
+- Per-step verdicts vs per-scenario only (from #47)
+- How to decide a step is "can't run" vs "should delegate for judgment" deterministically (from #47)
+- Retention policy for run workspaces (from #47)
+- Should ship skip the walkthrough with a "manual walkthrough required" note when no human is present? (from #47)
+- "Already verified" in finish: per session or per commit? (from #49)
+- Should finish work on the default branch with no feature branch? (from #49)
+- Reconcile the 054 walkthrough spec drift before or as part of this change? (from #49)
 
 ## Parked Ideas
 
