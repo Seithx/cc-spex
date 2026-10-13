@@ -303,10 +303,23 @@ When the mode is `full`:
 
 ## Phase 6: Step session
 
-Work through the steps in order. For each step, first show its `**Why**`, the
-exact command (or the `**Do:**` list), and `**What you should see:**`. Then offer:
+Work through the steps in order.
 
-{harness:interactive-choice} (single-select, header: "Step <n>"):
+**Always show the total.** Every time a step is mentioned in the chat (the step
+introduction, the choice header, the agent-run output, a mismatch prompt, a
+"Run the rest" progress line, or a resume offer), name it as `Step <n> of <M>`,
+never a bare `Step <n>`. `<M>` is `steps.total` from `"$STATUS" show` (or from
+the JSON that `"$STATUS" step` prints after each recorded result). Open each step
+with a progress line before its content:
+
+```text
+Step 3 of 8: Build the plan (US2) · done so far: 2 passed, 0 failed, 0 skipped
+```
+
+For each step, first show that progress line, its `**Why**`, the exact command
+(or the `**Do:**` list), and `**What you should see:**`. Then offer:
+
+{harness:interactive-choice} (single-select, header: "Step <n>/<M>"):
 
 1. **"Run it yourself"**: pipe the exact command to the clipboard and let the
    user run it:
@@ -324,7 +337,8 @@ exact command (or the `**Do:**` list), and `**What you should see:**`. Then offe
    outside the sandbox (FR-021).
 3. **"Run the rest"**: run every remaining agent-runnable step without pausing,
    stopping at the first mismatch, the first user-only step, or the next consent
-   point.
+   point. Print a one-line `Step <n> of <M>: <verdict>` after each step it runs,
+   so progress stays visible while it runs unattended.
 4. **"Skip"**: record the step as `skipped` with a reason.
 
 ### Agent-run transparency (FR-023, FR-023a, FR-024)
@@ -338,7 +352,7 @@ When the agent runs a step:
    this format:
 
    ```text
-   Running: <exact command>
+   Step 3 of 8 · Running: <exact command>
 
    <full output, or: Output: 212 lines, saved to specs/054-x/.walkthrough/step-3.log>
 
@@ -400,8 +414,9 @@ correction in that step's `**Result:**` (FR-026).
    with **keep as the default**, and make sure its teardown command is recorded
    (FR-019). Mark kept fixtures with `"$FIXTURE" keep "$SCRATCH" --name <name>`.
 3. Run the final check: `"$CHECK" "$RUNBOOK"`, and fix anything it reports.
-4. Give the closing summary in the chat: the status, the step tally, and the
-   runbook path.
+4. Give the closing summary in the chat: the status, the step tally against the
+   total (for example `8 steps: 6 passed, 1 failed, 1 skipped`), and the runbook
+   path.
 
 ### Commit offer (FR-030a)
 
@@ -421,7 +436,9 @@ cover it) or when the runbook lives in the self-ignoring scratch folder.
 
 When Phase 1 found `status: in_progress`:
 
-1. Offer to continue from the first `pending` step.
+1. Offer to continue from the first `pending` step, naming it with the total and
+   the progress so far (for example `Continue at Step 5 of 8? 4 done: 3 passed,
+   1 skipped`).
 2. Offer to restart any stopped quick fixtures (`"$FIXTURE" status "$SCRATCH"`
    shows their state).
 3. Before reusing a kept slow or remote fixture, check that it is still

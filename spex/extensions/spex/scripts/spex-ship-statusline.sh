@@ -245,17 +245,15 @@ render_flow() {
     wt_exists=$(echo "$wt_json" | jq -r '.exists' 2>/dev/null)
     if [ "$wt_exists" = "true" ]; then
       wt_status=$(echo "$wt_json" | jq -r '.status' 2>/dev/null)
+      local wt_total wt_pending wt_done
+      wt_total=$(echo "$wt_json" | jq -r '.steps.total // 0' 2>/dev/null)
+      wt_pending=$(echo "$wt_json" | jq -r '.steps.pending // 0' 2>/dev/null)
+      wt_done=$((wt_total - wt_pending))
       case "$wt_status" in
-        passed)  gate_wt="${GREEN}WT ✓${RESET}" ;;
-        failed)  gate_wt="${RED}WT ✗${RESET}" ;;
-        in_progress)
-          local wt_total wt_pending wt_done
-          wt_total=$(echo "$wt_json" | jq -r '.steps.total' 2>/dev/null)
-          wt_pending=$(echo "$wt_json" | jq -r '.steps.pending' 2>/dev/null)
-          wt_done=$((wt_total - wt_pending))
-          gate_wt="${YELLOW}WT ${wt_done}/${wt_total}${RESET}"
-          ;;
-        drafted) gate_wt="${DIM}WT ◌${RESET}" ;;
+        passed)      gate_wt="${GREEN}WT ✓ ${wt_done}/${wt_total}${RESET}" ;;
+        failed)      gate_wt="${RED}WT ✗ ${wt_done}/${wt_total}${RESET}" ;;
+        in_progress) gate_wt="${YELLOW}WT ${wt_done}/${wt_total}${RESET}" ;;
+        drafted)     gate_wt="${DIM}WT ◌ 0/${wt_total}${RESET}" ;;
       esac
     fi
   fi
