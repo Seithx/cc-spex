@@ -4,42 +4,38 @@
 # Input: JSON via stdin from Claude Code with context_window info
 # Output: Colored status line for ship or flow mode, or empty if no active state
 
-# Read stdin non-blocking (Claude Code may pass context JSON)
+# Read the context JSON Claude Code pipes to stdin. Read until EOF rather
+# than probing with `read -t 0`: Claude Code writes the JSON after spawning
+# the process, so a non-blocking probe races and usually sees nothing.
 STDIN_JSON=""
-if read -t 0 2>/dev/null; then
+if [ ! -t 0 ]; then
   STDIN_JSON=$(cat 2>/dev/null)
 fi
 
-# Resolve state file using the session's actual working directory.
+# Resolve the state file from the session's own checkout only.
 #
-# Claude Code passes workspace.current_dir in the stdin JSON, which reflects
-# the session's CWD (including worktrees). This is the primary source for
-# finding the correct state file in parallel worktree sessions.
+# Parallel ship pipelines each run in their own worktree, while a newly
+# started pipeline keeps its state in the main checkout until its worktree
+# exists. Falling back to the project dir would therefore show another
+# pipeline's progress in a session whose own state is gone (e.g., after its
+# pipeline completed), so there is deliberately no such fallback.
 STATE_FILE=""
 
-# Extract current_dir and project_dir from stdin JSON (if available)
+# Session directory: workspace.current_dir from the stdin JSON, else the
+# process CWD (Claude Code starts the statusline in the session's directory).
 SESSION_CWD=""
-SESSION_PROJECT_DIR=""
 if [ -n "$STDIN_JSON" ]; then
   SESSION_CWD=$(echo "$STDIN_JSON" | jq -r '.workspace.current_dir // empty' 2>/dev/null)
-  SESSION_PROJECT_DIR=$(echo "$STDIN_JSON" | jq -r '.workspace.project_dir // empty' 2>/dev/null)
 fi
+SESSION_DIR="${SESSION_CWD:-$PWD}"
+SESSION_ROOT=$(git -C "$SESSION_DIR" rev-parse --show-toplevel 2>/dev/null || echo "$SESSION_DIR")
 
 # Priority 1: Explicit env var (set by ship pipeline during initialization)
 if [ -n "${SHIP_STATE_FILE:-}" ] && [ -f "$SHIP_STATE_FILE" ]; then
   STATE_FILE="$SHIP_STATE_FILE"
-# Priority 2: Session's current working directory (from stdin JSON)
-elif [ -n "$SESSION_CWD" ] && [ -f "$SESSION_CWD/.specify/.spex-state" ]; then
-  STATE_FILE="$SESSION_CWD/.specify/.spex-state"
-# Priority 3: CWD (may differ from session CWD)
-elif [ -f ".specify/.spex-state" ]; then
-  STATE_FILE=".specify/.spex-state"
-# Priority 4: Session's project dir (from stdin JSON)
-elif [ -n "$SESSION_PROJECT_DIR" ] && [ -f "$SESSION_PROJECT_DIR/.specify/.spex-state" ]; then
-  STATE_FILE="$SESSION_PROJECT_DIR/.specify/.spex-state"
-# Priority 5: CLAUDE_PROJECT_DIR env var (legacy fallback)
-elif [ -n "${CLAUDE_PROJECT_DIR:-}" ] && [ -f "${CLAUDE_PROJECT_DIR}/.specify/.spex-state" ]; then
-  STATE_FILE="${CLAUDE_PROJECT_DIR}/.specify/.spex-state"
+# Priority 2: Root of the session's checkout (main repo or worktree)
+elif [ -f "$SESSION_ROOT/.specify/.spex-state" ]; then
+  STATE_FILE="$SESSION_ROOT/.specify/.spex-state"
 fi
 
 # Chain to previous statusline if configured
@@ -84,7 +80,7 @@ MODE=$(echo "$STATE_JSON" | jq -r '.mode // empty' 2>/dev/null)
 if [ "$MODE" = "flow" ]; then
   FEATURE_BRANCH=$(echo "$STATE_JSON" | jq -r '.feature_branch // empty' 2>/dev/null)
   if [ -n "$FEATURE_BRANCH" ]; then
-    CURRENT_BRANCH=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    CURRENT_BRANCH=$(git -C "$SESSION_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
     if [ -n "$CURRENT_BRANCH" ] && [ "$CURRENT_BRANCH" != "$FEATURE_BRANCH" ]; then
       rm -f "$STATE_FILE"
       exit 0

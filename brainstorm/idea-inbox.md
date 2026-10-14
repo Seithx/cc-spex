@@ -84,3 +84,12 @@ _Review-related ideas (goal-alignment-skip-behavior, spec-completeness, platform
 - **Summary**: `spex-finish-preserve-specs.sh` collapses any failure of the detach `is-enabled` probe (bad path, `cd` failure) into `enabled=false`, indistinguishable from detach genuinely being off, and `rsync` has no fallback.
 
 > Because the script prevents data loss before `finish` removes a worktree, misclassifying an environment/path error as "detach off" silently skips the copy. Consider validating `$WORKTREE` up front (exit non-zero on a bad path), distinguishing a clean "disabled" signal from an error, and optionally falling back to `cp -a` when `rsync` is absent.
+
+### parallel-ship-stage0-state-collision
+
+- **Source**: debugging (parallel ship pipelines in agentmeter)
+- **Date**: 2026-10-14
+- **Reference**: spex-ship-state.py, speckit.spex.ship.md (Stage 0), spex-worktrees manage
+- **Summary**: Two ship pipelines started from the same main checkout at overlapping times both write `.specify/.spex-state` in main during Stage 0 (before their worktrees exist), so the second `create` overwrites the first pipeline's state.
+
+> The worktree `create` action then copies whatever state is in main into its new worktree and deletes the main copy, so pipeline A can end up carrying pipeline B's state while B finds no state file at all (`advance` then reports `PIPELINE_COMPLETE`). Both sessions also share the main working tree while `specify` runs `git checkout -b`, so branch switches can collide as well. The statusline hijack fix (resolve state only from the session's own checkout) hides the display symptom but not this. Options: key the Stage 0 state file per session or per brainstorm (e.g. `.specify/.spex-state.<id>`) and rename it on worktree creation; refuse `create` when a running state already exists in main; or create the worktree before `specify` so Stage 0 never touches main.
