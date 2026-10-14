@@ -98,7 +98,7 @@ Parse the invocation arguments. The skill accepts:
 
 | Flag | Default | Description |
 |------|---------|-------------|
-| `--ask <level>` | `smart` | One of: `always`, `smart`, `never` |
+| `--ask <level>` | `smart` | One of: `always`, `smart`, `never`. With `--resume`, overrides the level saved in the state file |
 | `--resume` | off | Resume an interrupted pipeline from state file |
 | `--start-from <stage>` | (none) | Start from a specific stage (skips prior stages) |
 | `--no-external` | (from config) | Disable all external review tools |
@@ -145,6 +145,8 @@ ERROR: Invalid oversight level "X". Must be one of: always, smart, never
    - `--codex` / `--no-codex` overrides codex only
 
 4. Track whether `--coderabbit` was explicitly set (for auth validation).
+
+**`--ask` with `--resume`**: When `--ask` is given explicitly together with `--resume`, it replaces the oversight level saved in the state file (e.g., resume a pipeline paused in `smart` mode with `--ask never` to let it run through). Without `--ask`, `--resume` keeps the saved level; the `smart` default does NOT apply on resume.
 
 **`--resume` and `--start-from` are mutually exclusive** with each other. If both are provided, fail with:
 ```
@@ -213,6 +215,7 @@ export SHIP_STATE_FILE="$(pwd -P)/.specify/.spex-state"
 | `spex-ship-state.sh status` | Show current stage and status |
 | `spex-ship-state.sh pause` | Set status to paused |
 | `spex-ship-state.sh fail` | Set status to failed |
+| `spex-ship-state.sh resume [--ask <level>]` | Set status to running, reset retries, optionally replace the oversight level |
 | `spex-ship-state.sh cleanup` | Remove state file (pipeline done) |
 
 ### Stage Transitions
@@ -313,14 +316,16 @@ When `--resume` is set:
 
 4. If the calculated resume index is >= 9, the pipeline was already complete. Report this and clean up.
 
-5. Reset `retries` to 0 in the state file before resuming (so the resumed stage gets fresh retry attempts).
-
-6. Re-validate values from the state file before proceeding:
-   - Validate `ask` is one of `always`, `smart`, `never`
+5. Re-validate values from the state file before proceeding:
    - Validate `brainstorm_file` exists (if resuming the specify stage)
    - Validate `stage_index` is in range 0-7
 
-7. Update the state file with `status: running` before proceeding.
+6. Mark the pipeline as running again, resetting retries so the resumed stage gets fresh attempts. Pass `--ask` only if the user gave it explicitly on this invocation:
+   ```bash
+   "$SHIP_STATE" resume                      # keep the saved oversight level
+   "$SHIP_STATE" resume --ask "<ask-level>"  # user passed --ask with --resume
+   ```
+   The output confirms `RESUMED stage=<stage> index=<N> ask=<level>`. Use the `ask` value from this output (not the one read in step 2) for the rest of the run. If the script fails (e.g., invalid level), **STOP** and report the error.
 
 ## Start-From Logic
 
@@ -934,6 +939,7 @@ Please review these findings and provide guidance. You can:
 - Address specific findings ("fix #1 by doing X")
 - Skip findings ("skip #2, it's intentional")
 - Provide general guidance ("proceed, these are acceptable")
+- Change oversight for the rest of the run ("apply all, continue with never")
 ```
 
 3. Wait for user response.
@@ -942,7 +948,12 @@ Please review these findings and provide guidance. You can:
 
 After the user responds:
 
-1. Update state file: `status: "running"`.
+1. Mark the pipeline as running. If the user asked to change the oversight level (e.g., "continue with never"), pass it; otherwise keep the current level:
+   ```bash
+   "$SHIP_STATE" resume                      # keep the current level
+   "$SHIP_STATE" resume --ask "<ask-level>"  # user asked for a different level
+   ```
+   Use the `ask` value from the `RESUMED` output for the rest of the run.
 2. Apply any fixes the user requested.
 3. If user said to skip findings, proceed to the next stage.
 4. If user provided fixes, apply them and optionally re-run the review.

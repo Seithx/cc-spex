@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 STATE_FILE = os.environ.get("SHIP_STATE_FILE", ".specify/.spex-state")
 STAGES = ["specify", "clarify", "review-spec", "plan", "tasks", "review-plan", "implement", "review-code"]
+ASK_LEVELS = ["always", "smart", "never"]
 
 
 def stage_index(name):
@@ -173,6 +174,35 @@ def do_fail():
     print("FAILED")
 
 
+def do_resume(args):
+    ask = None
+    i = 0
+    while i < len(args):
+        a = args[i]
+        if a == "--ask":
+            i += 1
+            ask = args[i] if i < len(args) else ""
+        else:
+            print("ERROR: Unknown flag '{}'".format(a), file=sys.stderr)
+            sys.exit(2)
+        i += 1
+    if ask is not None and ask not in ASK_LEVELS:
+        print("ERROR: Invalid oversight level \"{}\". Must be one of: {}".format(ask, ", ".join(ASK_LEVELS)), file=sys.stderr)
+        sys.exit(2)
+    if not os.path.isfile(STATE_FILE):
+        print("ERROR: No state file found", file=sys.stderr)
+        sys.exit(1)
+
+    def apply(d):
+        d.update(status="running", retries=0)
+        if ask is not None:
+            d["ask"] = ask
+
+    update_state(apply)
+    data = read_state()
+    print("RESUMED stage={} index={} ask={}".format(data["stage"], data["stage_index"], data["ask"]))
+
+
 def do_cleanup():
     if os.path.isfile(STATE_FILE):
         os.remove(STATE_FILE)
@@ -289,6 +319,7 @@ COMMANDS = {
     "status": lambda a: do_status(),
     "pause": lambda a: do_pause(),
     "fail": lambda a: do_fail(),
+    "resume": lambda a: do_resume(a),
     "cleanup": lambda a: do_cleanup(),
     "checkpoint-record": lambda a: do_checkpoint_record(a),
     "watch-start": lambda a: do_watch_start(a),

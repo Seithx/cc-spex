@@ -1,4 +1,4 @@
-.PHONY: validate install uninstall reinstall check-upstream test-hook test-install test-install-remote test-setup-profile test-workflow-setup test-generated-trees test-walkthrough test-statusline release migrate sync-scripts sync-scripts-check help
+.PHONY: validate install uninstall reinstall check-upstream test-hook test-install test-install-remote test-setup-profile test-workflow-setup test-generated-trees test-walkthrough test-statusline test-ship-state release migrate sync-scripts sync-scripts-check help
 
 MARKETPLACE := spex-plugin-development
 PLUGIN := spex@$(MARKETPLACE)
@@ -22,6 +22,9 @@ test-workflow-setup:
 
 test-generated-trees:
 	@tests/test_generated_trees.sh
+
+test-ship-state:
+	@tests/test_ship_state.sh
 
 test-statusline:
 	@tests/test_ship_statusline.sh

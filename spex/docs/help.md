@@ -173,7 +173,7 @@ spex COMMANDS (helpers and configuration)
   /speckit-spex-ship          Autonomous full-cycle pipeline (brainstorm to completion)
                                 Requires: spex-gates + spex-deep-review extensions
                                 Flags: --ask always|smart|never,
-                                       --resume, --start-from <stage>
+                                       --resume [--ask <level>], --start-from <stage>
                                 Worktree: auto-creates if spex-worktrees enabled
                                 8 stages, then completion prompt (submit PR / merge / stop)
   /speckit-spex-walkthrough   Try the feature with a tutorial-style RUNBOOK.md

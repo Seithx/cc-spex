@@ -393,7 +393,7 @@ The pipeline runs nine stages in strict order:
 | `smart` (default) | Auto-fix | Pause | Pause |
 | `never` | Auto-fix | Auto-fix | Pause |
 
-Pipeline state is persisted to `.specify/.spex-state`, so interrupted runs can be resumed with `--resume`. Use `--start-from <stage>` to begin at a specific stage when artifacts from earlier stages already exist.
+Pipeline state is persisted to `.specify/.spex-state`, so interrupted runs can be resumed with `--resume`. Add `--ask <level>` to change the oversight level of the resumed run (for example `--resume --ask never` to let a pipeline paused in `smart` mode run through). Use `--start-from <stage>` to begin at a specific stage when artifacts from earlier stages already exist.
 
 ### Backpressure loops
 
