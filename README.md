@@ -17,7 +17,7 @@
 
 Six bundled extensions add quality gates, git worktree isolation, parallel agent execution, multi-perspective code review, and collaborative PR workflows. Each extension registers hooks that fire automatically at spec-kit lifecycle boundaries. You enable or disable them independently via `specify extension enable/disable`.
 
-cc-spex also adds commands for things Spec-Kit doesn't cover: interactive brainstorming, spec/code drift detection, and autonomous pipelines. For hands-on work, you call each step yourself. For full automation, `/speckit-spex-ship` chains the entire workflow from brainstorm to verification with configurable oversight.
+cc-spex also adds commands for things Spec-Kit doesn't cover: interactive brainstorming, spec/code drift detection, and autonomous pipelines. For hands-on work, you call each step yourself. For full automation, `/speckit-spex-ship` chains the entire workflow from brainstorm through code review with configurable oversight, and `/speckit-spex-finish` then verifies and lands the code.
 
 ## Workflow
 
@@ -124,7 +124,7 @@ In the `/speckit-spex-ship` pipeline, all review stages and the implementation s
 
 ### One-Shot: `/speckit-spex-ship`
 
-For smaller features or solo work where intermediate review is not needed, `/speckit-spex-ship` chains the entire workflow from brainstorm through verification in a single session. It runs all nine stages autonomously with configurable oversight levels (`--ask always|smart|never`). At completion, it presents a choice: submit a PR, merge directly to main, or stop for manual handling. See [Ship Command](#ship-command) below for details.
+For smaller features or solo work where intermediate review is not needed, `/speckit-spex-ship` chains the entire workflow from brainstorm through code review in a single session. It runs all eight stages autonomously with configurable oversight levels (`--ask always|smart|never`). At completion, it presents a choice: submit a PR, merge directly to main (both paths run verification first), or stop for manual handling. See [Ship Command](#ship-command) below for details.
 
 ```mermaid
 flowchart TD
@@ -268,12 +268,12 @@ cc-spex uses spec-kit's native extension system. Each extension lives in `spex/e
 
 ### Bundled Extensions
 
-**`spex`** (core, always active): Brainstorming, ship pipeline, help, evolve, spec refactoring, flow state tracking, guided demo (synthesizes user-observable flows from spec FRs with infrastructure triage), submit (PR creation + watch mode), finish (guided demo gate + squash + merge), and lifecycle hooks (flow state cleanup via `after_finish`).
+**`spex`** (core, always active): Brainstorming, ship pipeline, help, evolve, spec refactoring, flow state tracking, guided demo (synthesizes user-observable flows from spec FRs with infrastructure triage), submit (PR creation + watch mode), finish (verification + guided demo gate + squash + merge), and lifecycle hooks (flow state cleanup via `after_finish`).
 
 **`spex-gates`**: Quality gates that fire automatically via lifecycle hooks:
 - `after_specify`: runs spec review
 - `after_tasks`: runs plan review
-- `after_implement`: runs code review (with spec-declared constants drift check) and verification
+- `after_implement`: runs code review (with spec-declared constants drift check); verification runs later in finish or submit
 
 #### Spec-Declared Constants Drift Check
 
@@ -351,8 +351,8 @@ These commands are provided by spex extensions and available after `/spex:init`.
 | `/speckit-spex-gates-review-code` | spex-gates | Review code compliance (fires automatically via hook), includes spec-declared constants drift check |
 | `/speckit-spex-walkthrough` | spex | Try the feature: a testability check (one line and no files when nothing can be tried by hand), a tutorial-style `RUNBOOK.md` (each step says why, the exact command, and what you should see), then a co-pilot session where you run each command yourself (it lands on the clipboard) or let the agent run it with full expected-versus-actual output. Light and full fixture modes; advisory (never hard-blocks). `--draft` drafts without running; `--force` overrides a not-testable verdict; `<feature>` runs a drafted runbook later |
 | `/speckit-spex-submit` | spex | Push and create PR for team review. Runs verification, commits outstanding changes, creates PR with spec-linked body and REVIEWERS.md. `--watch`: monitor CI, auto-fix failures, triage review comments |
-| `/speckit-spex-finish` | spex | Walkthrough gate + squash + merge/keep (land the code). Reads the runbook status (from `/speckit-spex-walkthrough`) and offers to run or resume it when it is not passed, squashes commits with a conventional commit message, merges or keeps. When spex-detach enabled: archives specs to sibling repo and preserves the spec dir back to the main checkout before removing the worktree. `--no-walkthrough`: skip the gate |
-| `/speckit-spex-gates-stamp` | spex-gates | Verification only (use finish for full flow) |
+| `/speckit-spex-finish` | spex | Verify + walkthrough gate + squash + merge/keep (land the code). Runs `/speckit-spex-gates-verify` first and stops before squash or merge when any gate fails (skips the run when a pass is already recorded for the current code). Then reads the runbook status (from `/speckit-spex-walkthrough`) and offers to run or resume it when it is not passed, squashes commits with a conventional commit message, merges or keeps. When spex-detach enabled: archives specs to sibling repo and preserves the spec dir back to the main checkout before removing the worktree. `--no-verify`: skip verification. `--no-walkthrough`: skip the walkthrough gate |
+| `/speckit-spex-gates-verify` | spex-gates | Verification only (finish runs it first) |
 | `/speckit-spex-deep-review-review` | spex-deep-review | Multi-perspective code review with 5 agents |
 | `/speckit-spex-worktrees-manage` | spex-worktrees | List, create, or clean up git worktrees |
 | `/speckit-spex-collab-reviewers` | spex-collab | Generate REVIEWERS.md review guide, offer `[Spec]` PR (fires automatically via hook) |
@@ -365,13 +365,13 @@ These commands are provided by spex extensions and available after `/spex:init`.
 
 ## Ship Command
 
-`/speckit-spex-ship` is the autonomous full-cycle workflow that chains all stages from specification through verification. It requires both the `spex-gates` and `spex-deep-review` extensions to be enabled.
+`/speckit-spex-ship` is the autonomous full-cycle workflow that chains all stages from specification through code review. Verification runs afterwards in `/speckit-spex-finish` or `/speckit-spex-submit`. It requires both the `spex-gates` and `spex-deep-review` extensions to be enabled.
 
 ```
 /speckit-spex-ship [brainstorm-file] [--ask always|smart|never] [--resume] [--start-from <stage>] [--no-external] [--[no-]coderabbit] [--[no-]copilot] [--[no-]codex]
 ```
 
-The pipeline runs nine stages in strict order:
+The pipeline runs eight stages (0 to 7) in strict order, ending at review-code, followed by a completion prompt:
 
 | # | Stage | What happens |
 |---|-------|-------------|
@@ -383,7 +383,7 @@ The pipeline runs nine stages in strict order:
 | 5 | review-plan | Validate plan feasibility, create `REVIEWERS.md` |
 | 6 | implement | Execute implementation following task plan (with per-task test checkpoints) |
 | 7 | review-code | Spec compliance + deep-review agents + auto-fix loop |
-| 8 | completion | End-of-pipeline choice: submit PR (`/speckit-spex-submit`), merge directly (`/speckit-spex-finish`), or stop here for manual handling |
+| (end) | completion | End-of-pipeline choice: submit PR (`/speckit-spex-submit`), merge directly (`/speckit-spex-finish`), or stop here for manual handling |
 
 **Oversight levels** control how findings are handled:
 
@@ -412,7 +412,7 @@ When the `spex-worktrees` extension is enabled, the ship pipeline automatically 
 After the pipeline completes, you choose what to do:
 
 - **Submit PR**: run `/speckit-spex-submit` to push and create a PR for team review
-- **Merge directly**: run `/speckit-spex-finish` to walk through, squash, and merge to main
+- **Merge directly**: run `/speckit-spex-finish` to verify, walk through, squash, and merge to main
 - **Test first**: leaves everything as-is for manual testing
 
 If worktrees are not enabled, the pipeline works in-place on the feature branch (existing behavior).
@@ -588,7 +588,7 @@ Run `/spex:init` in each project. Extensions are installed automatically. If `.s
 | `/spex:review-code` | `/speckit-spex-gates-review-code` (or automatic via hook) |
 | `/spex:review-plan` | `/speckit-spex-gates-review-plan` (or automatic via hook) |
 | `/spex:evolve` | `/speckit-spex-evolve` |
-| `/spex:stamp` | `/speckit-spex-gates-stamp` |
+| `/spex:stamp` | `/speckit-spex-finish` |
 | `/spex:worktree` | `/speckit-spex-worktrees-manage` |
 | `/spex:traits enable X` | `specify extension enable X` |
 | `/spex:traits disable X` | `specify extension disable X` |

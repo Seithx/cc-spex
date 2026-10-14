@@ -12,7 +12,7 @@ Auto-generated from all feature plans. Last updated: 2026-04-22
 spex/
   extensions/          # Extension bundles
     spex/              # Core spex extension (brainstorm, ship, using-superpowers)
-    spex-gates/        # Quality gates (review-spec, review-code, review-plan, stamp)
+    spex-gates/        # Quality gates (review-spec, review-code, review-plan, verify)
     spex-worktrees/    # Git worktree isolation
     spex-teams/        # Parallel agent orchestration
     spex-deep-review/  # Multi-agent code review
@@ -31,7 +31,7 @@ Bash (POSIX-compatible, uses `jq` for JSON), Markdown for commands/skills: Follo
 ## Extensions
 
 - `spex`: Core extension with brainstorm, ship, flow state, and methodology entry point
-- `spex-gates`: Quality gates on speckit commands (review-spec, review-code, review-plan, stamp, verification)
+- `spex-gates`: Quality gates on speckit commands (review-spec, review-code, review-plan, verify)
 - `spex-worktrees`: Git worktree isolation after speckit.specify (creates sibling worktree, restores main)
 - `spex-teams`: Parallel implementation via Claude Code Agent Teams (experimental)
 - `spex-deep-review`: Multi-agent code review with 5 specialized review agents and autonomous fix loop

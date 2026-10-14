@@ -93,3 +93,75 @@ _Review-related ideas (goal-alignment-skip-behavior, spec-completeness, platform
 - **Summary**: Two ship pipelines started from the same main checkout at overlapping times both write `.specify/.spex-state` in main during Stage 0 (before their worktrees exist), so the second `create` overwrites the first pipeline's state.
 
 > The worktree `create` action then copies whatever state is in main into its new worktree and deletes the main copy, so pipeline A can end up carrying pipeline B's state while B finds no state file at all (`advance` then reports `PIPELINE_COMPLETE`). Both sessions also share the main working tree while `specify` runs `git checkout -b`, so branch switches can collide as well. The statusline hijack fix (resolve state only from the session's own checkout) hides the display symptom but not this. Options: key the Stage 0 state file per session or per brainstorm (e.g. `.specify/.spex-state.<id>`) and rename it on worktree creation; refuse `create` when a running state already exists in main; or create the worktree before `specify` so Stage 0 never touches main.
+
+### verify-record-forgeable
+
+- **Source**: deep-review
+- **Date**: 2026-10-13
+- **Reference**: 055-merge-stamp-finish
+- **Summary**: Anyone with shell access (including the agent) can run `spex-verify-record.sh record` directly and forge a pass, which finish's already-verified row then trusts.
+
+> Make bypasses visible rather than impossible: print the record details when finish uses it, flag direct `record` calls in pretool-gate, or store a summary of gate evidence in the record. Relates to brainstorm #46.
+
+### hook-project-script-fallback
+
+- **Source**: deep-review
+- **Date**: 2026-10-13
+- **Reference**: 055-merge-stamp-finish
+- **Summary**: If the plugin copy is missing, the commit hooks fall back to running a project-provided `.specify/.../spex-verify-record.sh`.
+
+> This widens the set of hooks that run project code on their own. Consider dropping the fallback and treating a missing plugin copy as "not verified".
+
+### fingerprint-algorithm-version
+
+- **Source**: deep-review
+- **Date**: 2026-10-13
+- **Reference**: 055-merge-stamp-finish
+- **Summary**: The hooks read the record with the plugin's script copy, while verify and finish use the project-installed copies.
+
+> If the fingerprint algorithm ever changes, the writer and reader could disagree. Store an algorithm version in the record and treat a mismatch as stale.
+
+### readme-flowchart-closeout
+
+- **Source**: deep-review
+- **Date**: 2026-10-13
+- **Reference**: 055-merge-stamp-finish
+- **Summary**: The README workflow flowchart has no finish or submit node, so the verify-and-land close-out is not shown.
+
+> Add a close-out branch from ImplPR and Ship to `/speckit-spex-finish (verify + walkthrough + squash + land)`.
+
+### fingerprint-file-mode
+
+- **Source**: deep-review
+- **Date**: 2026-10-13
+- **Reference**: 055-merge-stamp-finish
+- **Summary**: The fingerprint ignores file mode, so `chmod +x` does not invalidate a verification pass.
+
+> Including the mode would also change walkthrough currency (shared fingerprint), so existing runbook fingerprints would show as stale once.
+
+### hook-commit-target-cwd
+
+- **Source**: deep-review
+- **Date**: 2026-10-13
+- **Reference**: 055-merge-stamp-finish
+- **Summary**: The pre-commit reminder checks the record in the hook's cwd, not in the checkout the commit targets (`git -C`, `cd x &&`).
+
+> The record is per worktree, so committing into a sibling worktree from the main checkout gives a false reminder. Parse `git -C` or a leading `cd` to resolve the target.
+
+### submit-embedded-state-on-failure
+
+- **Source**: deep-review
+- **Date**: 2026-10-13
+- **Reference**: 055-merge-stamp-finish
+- **Summary**: With `--embedded`, `.specify/.spex-state` stays behind when submit fails after a passing verify.
+
+> Document this as intentional for retries, or remove the state file on submit's failure paths.
+
+### test-record-survives-clear
+
+- **Source**: deep-review
+- **Date**: 2026-10-13
+- **Reference**: 055-merge-stamp-finish
+- **Summary**: No test pins FR-009d (the verification record survives `/speckit-spex-clear` and state cleanup).
+
+> Add a test that applies spex-init's exclude patterns, records, then creates and deletes `.specify/.spex-state`, and asserts the record is still verified.

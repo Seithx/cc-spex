@@ -27,8 +27,8 @@ REQUIRED_KEYS = ["status", "mode", "steps_total", "step_results"]
 RESULTS = ("passed", "failed", "skipped", "pending")
 
 
-def run(args, env=None):
-    r = subprocess.run(args, capture_output=True, text=True, env=env)
+def run(args, env=None, cwd=None):
+    r = subprocess.run(args, capture_output=True, text=True, env=env, cwd=cwd)
     return r.returncode, r.stdout
 
 
@@ -47,6 +47,37 @@ def today():
 
 # ─── Fingerprint (research R1) ───
 
+def _plain_index():
+    """Path of the real index when seeding from it cannot change the result,
+    else None. Seeding is only safe when every entry is a plain cached entry
+    (no assume-unchanged, skip-worktree/sparse, or unmerged flags) and no
+    tracked file matches an ignore rule: an empty index never picks those
+    up, a seeded `git add -A` would keep them. Submodule gitlinks are also
+    excluded (an uninitialized one survives a seeded add but not an empty one).
+    The listings run from the top level, since `ls-files` only covers cwd."""
+    rc, top = run(["git", "rev-parse", "--show-toplevel"])
+    top = top.strip()
+    if rc != 0 or not top:
+        return None
+    rc, real = run(["git", "rev-parse", "--git-path", "index"], cwd=top)
+    real = real.strip()
+    if rc != 0 or not real:
+        return None
+    real = os.path.join(top, real)
+    if not os.path.isfile(real):
+        return None
+    rc, out = run(["git", "ls-files", "-v", "-s"], cwd=top)
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        if not line.startswith("H ") or line.startswith("H 160000 "):
+            return None
+    rc, out = run(["git", "ls-files", "-ci", "--exclude-standard"], cwd=top)
+    if rc != 0 or out.strip():
+        return None
+    return real
+
+
 def code_tree():
     """Write the working tree (tracked + untracked, honoring .gitignore) to a
     temporary index and return its tree SHA. None when not a git repo."""
@@ -57,8 +88,28 @@ def code_tree():
     env = dict(os.environ)
     env["GIT_INDEX_FILE"] = idx
     try:
+        # Seed the temporary index from the real one so `git add -A` can reuse
+        # its stat cache instead of re-hashing every file (this runs on every
+        # commit via the pre-commit verification reminder). Only a plain index
+        # is used (see _plain_index), so the tree SHA equals the one built
+        # from an empty index; otherwise, or on any problem, start from empty.
+        seeded = False
+        real = _plain_index()
+        if real:
+            try:
+                shutil.copyfile(real, idx)
+                seeded = True
+            except OSError:
+                seeded = False
         if run(["git", "add", "-A"], env=env)[0] != 0:
-            return None
+            if not seeded:
+                return None
+            try:
+                os.remove(idx)
+            except OSError:
+                pass
+            if run(["git", "add", "-A"], env=env)[0] != 0:
+                return None
         rc, out = run(["git", "write-tree"], env=env)
         return out.strip() if rc == 0 else None
     finally:
@@ -73,7 +124,7 @@ def fingerprint():
     tree = code_tree()
     if tree is None:
         return None
-    rc, out = run(["git", "ls-tree", "-r", tree])
+    rc, out = run(["git", "ls-tree", "--full-tree", "-r", tree])
     if rc != 0:
         return None
     entries = []
@@ -528,7 +579,18 @@ COMMANDS = {
     "not-testable": do_not_testable,
 }
 
+def _exit_on_sigterm(signum, frame):
+    # Turn SIGTERM into SystemExit so `finally` blocks remove temp dirs
+    # (the pre-commit hook sends SIGTERM to the group on timeout).
+    sys.exit(143)
+
+
 if __name__ == "__main__":
+    try:
+        import signal
+        signal.signal(signal.SIGTERM, _exit_on_sigterm)
+    except (ImportError, AttributeError, ValueError):
+        pass
     if len(sys.argv) < 2 or sys.argv[1] not in COMMANDS:
         sys.stderr.write("Usage: spex-runbook-status.py {%s}\n" % "|".join(COMMANDS))
         sys.exit(2)

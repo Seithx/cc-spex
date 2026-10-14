@@ -49,7 +49,6 @@ stage_skill() {
     5) echo "spex:review-plan" ;;
     6) echo "speckit-implement" ;;
     7) echo "spex:review-code" ;;
-    8) echo "spex:verification-before-completion" ;;
     *) echo "unknown" ;;
   esac
 }
@@ -65,7 +64,6 @@ stage_name() {
     5) echo "review-plan" ;;
     6) echo "implement" ;;
     7) echo "review-code" ;;
-    8) echo "stamp" ;;
     *) echo "unknown" ;;
   esac
 }
@@ -81,7 +79,6 @@ skill_to_stage() {
     spex:review-plan) echo "5" ;;
     speckit-implement) echo "6" ;;
     spex:review-code) echo "7" ;;
-    spex:verification-before-completion) echo "8" ;;
     *) echo "-1" ;;
   esac
 }
@@ -123,9 +120,6 @@ BRIEF=""
 case "$CURRENT_INDEX" in
   7)
     BRIEF="\n--- STAGE 7 REQUIREMENTS ---\nYou MUST invoke {Skill: spex:review-code} which runs:\n  1. Spec compliance check (compliance score)\n  2. Code Review Guide -> REVIEW-CODE.md\n  3. Deep review: 5 agents (correctness, architecture, security, production, tests)\n  4. CodeRabbit CLI: coderabbit review --agent --type all (LOCAL, no PR needed)\n  5. Fix loop for Critical/Important findings\n  6. Deep Review Report -> REVIEW-CODE.md\nThe advance script WILL REJECT advancement if REVIEW-CODE.md lacks a Deep Review Report section."
-    ;;
-  8)
-    BRIEF="\n--- STAGE 8 REQUIREMENTS ---\nYou MUST invoke {Skill: spex:verification-before-completion} which runs:\n  1. Test suite execution\n  2. Spec compliance validation\n  3. Drift check\nDo NOT claim completion without running actual verification commands."
     ;;
 esac
 

@@ -2,7 +2,6 @@
   "harness": "codex",
   "version": "2.0.0",
   "tokens": {
-    "suppress-prompts-stamp": "suppress all prompts, complete the stamp",
     "suppress-prompts-verify": "suppress all prompts, complete the verification",
     "interactive-choice": "present the choice as a clear text prompt",
     "interactive-choice-skip": "(skip in autonomous mode)",

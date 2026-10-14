@@ -114,7 +114,7 @@ fi
 
 ## Phase 1: Verification
 
-Invoke `/speckit-spex-gates-verify` (the full verification gate). This runs:
+Invoke `/speckit-spex-gates-verify --embedded` (the full verification gate). The `--embedded` flag keeps `.specify/.spex-state` in place (submit's later watch phase still needs it) and suppresses verify's completion banner; submit owns state cleanup. Submit always runs verification (it does not skip on a recorded pass); a passing run records the pass for the current code state, so a later `/speckit-spex-finish` on unchanged code does not verify again. This runs:
 1. Full test suite
 2. Code hygiene review
 3. Spec compliance validation (100% required)
@@ -402,6 +402,14 @@ This section runs after Phase 4 completes, but only when watch mode is NOT activ
     ```
 - If no hooks are registered or `.specify/extensions.yml` does not exist, skip silently
 
+**State cleanup (watch mode NOT active):** verify ran with `--embedded`, so it left `.specify/.spex-state` in place. Submit owns the cleanup; remove the state file now (watch mode removes it through `watch-cleanup` instead):
+
+```bash
+if [ "$WATCH_MODE" != true ]; then
+  rm -f .specify/.spex-state
+fi
+```
+
 **After post-execution hooks execute (or are skipped), and watch mode is NOT active, the command is complete. STOP here.**
 
 If in a worktree, also report: "Run `/speckit-spex-finish` after the PR is reviewed and approved to squash, merge, and clean up."
@@ -416,6 +424,9 @@ This phase only executes when `WATCH_MODE` is true and a PR was created or pushe
 if [ "$WATCH_MODE" = true ] && ! command -v gh >/dev/null 2>&1; then
   echo "Watch mode requires the gh CLI. Falling back to normal submit."
   WATCH_MODE=false
+  # Phase 4 skipped state cleanup because watch mode was still on; do it now
+  # (verify ran with --embedded and left the state file in place).
+  rm -f .specify/.spex-state
 fi
 ```
 

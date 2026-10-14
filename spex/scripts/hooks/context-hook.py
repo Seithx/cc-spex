@@ -172,7 +172,7 @@ def _inline_validate(prompt, plugin_root):
     KNOWN_SPEX_COMMANDS = {
         'brainstorm', 'constitution', 'evolve', 'help', 'init',
         'review-code', 'review-plan', 'review-spec', 'ship', 'extensions',
-        'deep-review', 'stamp', 'verify', 'worktree',
+        'deep-review', 'verify', 'worktree',
     }
     COMMAND_CORRECTIONS = {
         'specify': '/speckit-specify',

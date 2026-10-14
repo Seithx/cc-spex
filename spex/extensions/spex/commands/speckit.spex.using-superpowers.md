@@ -63,7 +63,7 @@ Before ANY implementation work:
 3. **Check for relevant skills before ANY task.** spex has skills for each phase.
 4. **Validate spec compliance.** Code review and verification check specs.
 5. **Handle spec/code drift.** Use speckit-spex-evolve when mismatches detected.
-6. **Close out features.** After review passes: `/clear`, then `/speckit-spex-finish` (verifies + merges/creates PR in one step).
+6. **Close out features.** After review passes: `/clear`, then `/speckit-spex-finish` (verifies, runs the walkthrough gate, squashes, and merges or keeps the branch in one step; it stops before squash if verification fails).
 
 ## Available spex Skills
 
@@ -81,8 +81,8 @@ Before ANY implementation work:
 - **speckit-spex-gates-review-plan** - Post-planning quality validation (coverage, red flags, task quality)
 - **speckit-spex-gates-review-code** - Review code-to-spec compliance
 - **speckit-spex-evolve** - Handle spec/code mismatches with AI guidance
-- **speckit-spex-finish** - Verify + merge/PR/keep (all-in-one feature completion)
-- **speckit-spex-gates-stamp** - Verification only (use finish for full flow)
+- **speckit-spex-finish** - Verify + walkthrough gate + squash + merge/keep (all-in-one feature completion)
+- **speckit-spex-gates-verify** - Verification only (finish runs it first)
 - **speckit-spex-spec-refactoring** - Consolidate and improve evolved specs
 
 ### Collaboration (spex-collab extension)

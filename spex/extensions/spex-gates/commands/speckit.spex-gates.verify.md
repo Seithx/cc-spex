@@ -26,6 +26,29 @@ fi
 
 In autonomous mode: do NOT output a completion summary, do NOT ask "Shall I proceed?", do NOT suggest next steps. Complete the verification and return.
 
+## Arguments
+
+```text
+/speckit-spex-gates-verify [--embedded] [--auto] [<path/to/spec.md>]
+```
+
+- `--embedded`: set `EMBEDDED=true`. Finish and submit pass this flag when they invoke verify as one phase of their own run. Embedded runs perform every gate and record a pass exactly like standalone runs, but skip step 8 (no completion banner, no removal of `.specify/.spex-state`), because the caller owns state cleanup. Without the flag, `EMBEDDED=false` and step 8 runs as described.
+- `--auto`: set `AUTONOMOUS_MODE=true` regardless of `.specify/.spex-state`. Finish passes this when it runs unattended (`finish --auto` or a ship pipeline), so verify never prompts in that case.
+- `<path/to/spec.md>`: optional spec to verify. Any remaining argument that is not a flag is the spec path.
+
+```bash
+EMBEDDED=false
+SPEC_ARG=""
+for arg in "$@"; do
+  case "$arg" in
+    --embedded) EMBEDDED=true ;;
+    --auto) AUTONOMOUS_MODE=true ;;
+    --*) ;;  # ignore unknown flags
+    *) SPEC_ARG="$arg" ;;
+  esac
+done
+```
+
 ## Overview
 
 **Core principle:** Evidence before claims, always.
@@ -77,23 +100,41 @@ Skip any step = lying, not verifying
 
 ## Spec Selection
 
-If a spec path is provided as an argument, use it directly.
+Resolve `FEATURE_SPEC` (the spec file) and `FEATURE_DIR` (its directory, relative to the repository root, for example `specs/055-x`) once. Every later step uses this `FEATURE_DIR`, and step 7 records the pass for exactly this directory.
 
-Otherwise, attempt branch-based resolution:
+**If a spec path was given** (`SPEC_ARG` is set), use it directly:
+
+```bash
+if [ -n "$SPEC_ARG" ]; then
+  FEATURE_SPEC="$SPEC_ARG"
+  FEATURE_DIR=$(dirname "$SPEC_ARG")
+fi
+```
+
+If `$FEATURE_SPEC` does not exist, report `no spec` (see below) and stop.
+
+**Otherwise**, attempt branch-based resolution:
 
 ```bash
 .specify/scripts/bash/check-prerequisites.sh --json --paths-only 2>/dev/null
 ```
 
-If this succeeds (outputs JSON with `FEATURE_SPEC`), use the resolved spec path. Parse the JSON to extract `FEATURE_SPEC` and `FEATURE_DIR`.
+If this succeeds (outputs JSON with `FEATURE_SPEC`), use the resolved spec path. Parse the JSON to extract `FEATURE_SPEC` and `FEATURE_DIR`, and convert `FEATURE_DIR` to a path relative to the repository root (strip the `$(git rev-parse --show-toplevel)/` prefix).
 
-If this fails (not on a feature branch, no matching spec directory), fall back to interactive selection:
+If this fails (not on a feature branch, no matching spec directory):
+
+- **Unattended run** (`AUTONOMOUS_MODE=true`): do not show a picker. Report `no spec` and stop:
+  ```
+  VERIFY_RESULT:
+    status: NO_SPEC
+  ```
+- **Interactive run**: fall back to interactive selection:
 
 ```bash
 find specs/ -name "spec.md" -type f 2>/dev/null | head -20
 ```
 
-**If specs found:** Present list and ask user to select one {harness:interactive-choice-skip}.
+**If specs found:** Present list and ask user to select one {harness:interactive-choice-skip}. Set `FEATURE_SPEC` to the chosen file and `FEATURE_DIR` to its directory. If the user cancels the selection, emit the `NO_SPEC` result block below and stop.
 
 **If no specs found:** Inform user:
 ```
@@ -103,22 +144,31 @@ Verification requires a spec to validate against.
 Use `speckit-spex-brainstorm` or `/speckit-specify` to create one first.
 ```
 
+Then emit the result block and stop (callers such as finish read it):
+```
+VERIFY_RESULT:
+  status: NO_SPEC
+```
+
 ## The Process
+
+**Capture the code state before the first gate.** The pass recorded in step 7 must cover exactly the code the gates ran against. `begin` stores the current fingerprint in the git directory, so step 7 finds it even when it runs in a separate shell:
+
+```bash
+RECORD=".specify/extensions/spex-gates/scripts/spex-verify-record.sh"
+[ -f "$RECORD" ] || RECORD="spex/scripts/spex-verify-record.sh"
+sh "$RECORD" begin
+```
+
+If `begin` fails, continue; step 7 then records without the comparison and adds a warning.
+
+If any step below edits code (for example a test or hygiene fix), the gates already run no longer cover the new code: after the fix, restart from step 0 (run `begin` again). Step 7 refuses to record a pass when the code no longer matches the stored start state.
 
 ### 0. Closeout Gate
 
 Before any other verification, check whether unresolved Critical or Important findings remain from a deep review.
 
-Resolve the spec directory (reuse the same `check-prerequisites.sh` logic from the Spec Selection section above):
-
-```bash
-PREREQS=$(.specify/scripts/bash/check-prerequisites.sh --json --paths-only 2>/dev/null) || true
-if [ -n "$PREREQS" ]; then
-  FEATURE_DIR=$(echo "$PREREQS" | jq -r '.FEATURE_DIR' 2>/dev/null)
-fi
-```
-
-Run the closeout gate script:
+Use the `FEATURE_DIR` resolved in Spec Selection (do not re-derive it). Run the closeout gate script:
 
 ```bash
 CLOSEOUT_GATE=".specify/extensions/spex-gates/scripts/spex-closeout-gate.sh"
@@ -131,7 +181,7 @@ if [ -x "$CLOSEOUT_GATE" ] && [ -n "${FEATURE_DIR:-}" ]; then
 fi
 ```
 
-**If the gate fails** (exit code non-zero): STOP. Report the blocking findings from the gate output and do not proceed to any further verification steps. The developer must fix the findings and re-run the deep review.
+**If the gate fails** (exit code non-zero): STOP. Report the blocking findings from the gate output and do not proceed to any further verification steps. The developer must fix the findings and re-run the deep review. Emit the step 7 `VERIFY_RESULT` block with `closeout` as the failing gate; do not record a pass.
 
 **If the gate passes** (exit code 0, or script not found, or no spec dir): proceed to the next step.
 
@@ -143,10 +193,7 @@ Before running verification, read the runbook status for the feature:
 STATUS=".specify/extensions/spex-gates/scripts/spex-runbook-status.sh"
 [ -f "$STATUS" ] || STATUS="spex/scripts/spex-runbook-status.sh"
 
-FEATURE_DIR=""
-PREREQS=$(.specify/scripts/bash/check-prerequisites.sh --json --paths-only 2>/dev/null) || true
-[ -n "$PREREQS" ] && FEATURE_DIR=$(echo "$PREREQS" | jq -r '.FEATURE_DIR' 2>/dev/null)
-
+# FEATURE_DIR comes from Spec Selection
 WT_STATUS="missing"
 WT_NOT_TESTABLE=false
 if [ -n "$FEATURE_DIR" ]; then
@@ -390,20 +437,44 @@ OR
 **If ALL true:**
 - VERIFIED: Proceed to completion
 - Safe to commit/merge/deploy
-- **Write verification marker** so the commit gate hook allows the commit:
+- **Record the pass** for the current code state, so finish and the pre-commit reminder recognize it (also across `/clear` and new sessions, until code outside `specs/` and `brainstorm/` changes):
   ```bash
-  touch "${TMPDIR:-/tmp}/.claude-spex-verified-${SESSION_ID}"
+  RECORD=".specify/extensions/spex-gates/scripts/spex-verify-record.sh"
+  [ -f "$RECORD" ] || RECORD="spex/scripts/spex-verify-record.sh"
+  # record compares against the start state stored by `begin`
+  sh "$RECORD" record --feature "$FEATURE_DIR"
+  RECORD_EXIT=$?
   ```
-  (The SESSION_ID is available from the hook context. If not, use a stable session identifier.)
+  The recorded feature is exactly the `FEATURE_DIR` that was verified.
+  - `RECORD_EXIT=0`: the pass is recorded. If `begin` had failed at the start, add `warning: pass recorded without a start-state check` to the result block.
+  - `RECORD_EXIT=1`: code changed while the gates ran, so nothing was recorded and the run is not verified (do not report PASS). Restart **once** from the start of The Process: run `begin` again (the failed `record` removed the start state), then step 0. If `record` exits 1 again on the restarted run, stop and report `ERROR` with `error: code changed during verification` and the output of `git status --short` (outside `specs/` and `brainstorm/`); a test suite that writes untracked artifacts (coverage, reports, snapshots) causes this, and the fix is to add those artifacts to `.gitignore`.
+  - Any other non-zero `RECORD_EXIT` (2: no git repository, missing `jq` or Python, unwritable git directory; 127: script not found): the gates passed but the pass could not be recorded. Report PASS and add `warning: pass not recorded: <first stderr line>` to the result block, so the caller knows finish and the pre-commit reminder will not see it.
 
 **If ANY false:**
 - NOT VERIFIED: Block completion
 - Fix issues before proceeding
 - Re-run verification after fixes
 
+**A failed or interrupted run never records a pass.** Only call `record` after every gate above passed in this run. If any step errors, is interrupted, or is skipped, do not call `record`.
+
+**Emit the result block** at the end of every run (callers such as finish read it):
+
+```
+VERIFY_RESULT:
+  status: PASS | FAIL | NO_SPEC | ERROR
+  feature: <FEATURE_DIR>
+  failed_gates:
+    - <gate>: <one-line reason>
+  warning: <only when the pass was not recorded, or recorded without a start-state check>
+```
+
+Gate names: `closeout`, `tests`, `code hygiene`, `spec compliance`, `spec drift`, `success criteria`. List only failing gates (empty on PASS). Use `ERROR` with a one-line `error:` field when the run could not complete.
+
 ### 8. Completion Celebration
 
-**After all verification passes** (go decision is positive), check if a state file exists:
+**Skip this entire step when `EMBEDDED=true`**: no banner, and do NOT remove `.specify/.spex-state`. The calling command (finish or submit) owns state cleanup.
+
+**After all verification passes** (go decision is positive) and `EMBEDDED=false`, check if a state file exists:
 
 ```bash
 STATE_FILE=".specify/.spex-state"

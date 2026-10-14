@@ -55,7 +55,7 @@ git worktree remove ../<feature-name>
 
 ## Commands
 
-- `/spex:ship` - Full autonomous workflow (specify through verify)
+- `/spex:ship` - Full autonomous workflow (specify through review-code; finish or submit then verifies)
 - `/spex:brainstorm` - Refine ideas into specifications
 - `/spex:help` - Quick reference for all commands
 - `/speckit-specify` - Create feature specification

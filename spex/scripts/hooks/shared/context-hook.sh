@@ -43,7 +43,7 @@ fi
 COMMAND_SHORT=$(echo "$SKILL_NAME" | sed 's|^spex:||')
 
 # Known spex commands
-KNOWN_COMMANDS="brainstorm constitution evolve help init review-code review-plan review-spec ship extensions deep-review stamp verify worktree"
+KNOWN_COMMANDS="brainstorm constitution evolve help init review-code review-plan review-spec ship extensions deep-review verify worktree"
 
 # Check if command is known
 IS_KNOWN=false

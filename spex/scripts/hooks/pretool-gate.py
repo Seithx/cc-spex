@@ -171,7 +171,6 @@ STAGE_SKILLS = {
     5: "spex:review-plan",
     6: "speckit-implement",
     7: "spex:review-code",
-    8: "spex:verification-before-completion",
 }
 
 STAGE_NAMES = {
@@ -183,7 +182,6 @@ STAGE_NAMES = {
     5: "review-plan",
     6: "implement",
     7: "review-code",
-    8: "stamp",
 }
 
 SKILL_TO_STAGE = {v: k for k, v in STAGE_SKILLS.items()}
@@ -261,14 +259,6 @@ def _stage_brief(stage_index):
             "\n  6. Deep Review Report -> REVIEW-CODE.md"
             "\nThe advance script WILL REJECT advancement if REVIEW-CODE.md lacks a Deep Review Report section."
         ),
-        8: (
-            "\n--- STAGE 8 REQUIREMENTS ---"
-            "\nYou MUST invoke {Skill: spex:verification-before-completion} which runs:"
-            "\n  1. Test suite execution"
-            "\n  2. Spec compliance validation"
-            "\n  3. Drift check"
-            "\nDo NOT claim completion without running actual verification commands."
-        ),
     }
     return briefs.get(stage_index, '')
 
@@ -277,7 +267,7 @@ def _stage_brief(stage_index):
 # Gate 4: Verification reminder
 # ---------------------------------------------------------------------------
 
-def check_verification_gate(tool_name, tool_input, session_id, cwd):
+def check_verification_gate(tool_name, tool_input, cwd):
     """Remind about verification before git commit in spex projects.
 
     Returns context string (non-blocking reminder), or None.
@@ -292,18 +282,93 @@ def check_verification_gate(tool_name, tool_input, session_id, cwd):
     if not (Path(cwd) / '.specify').is_dir():
         return None
 
-    if marker_path('spex-verified', session_id).exists():
-        return None
-
     # Allow spec-only commits without verification
     if _is_spec_only_commit(cwd):
         return None
 
-    return (
-        "spex stamp reminder: Final verification has not been run this session. "
-        "Consider running /speckit-spex-gates-stamp first, or confirm with the user that "
-        "they want to proceed without the final gate."
-    )
+    # Last, because it hashes the working tree
+    if _is_verified(cwd):
+        return None
+
+    return VERIFY_REMINDER
+
+
+VERIFY_REMINDER = (
+    "spex verify reminder: No verification is recorded for the current code. "
+    "Consider running /speckit-spex-gates-verify or /speckit-spex-finish first, "
+    "or confirm with the user that they want to proceed without the final gate."
+)
+
+
+def _verify_record_script(cwd):
+    """Locate spex-verify-record.sh (plugin copy first, then project install)."""
+    candidates = [
+        Path(__file__).resolve().parent.parent / 'spex-verify-record.sh',
+        Path(cwd) / '.specify' / 'extensions' / 'spex-gates' / 'scripts' / 'spex-verify-record.sh',
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _is_verified(cwd):
+    """True when the shared verification record matches the current code.
+
+    Missing script, errors, and timeouts count as not verified (reminder fires).
+    """
+    import subprocess
+    script = _verify_record_script(cwd)
+    if script is None:
+        return False
+    try:
+        # Own process group, so a timeout also kills the fingerprint helpers
+        # (python, git add) instead of leaving them running.
+        proc = subprocess.Popen(
+            ['sh', str(script), 'check'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            cwd=cwd, start_new_session=True,
+        )
+    except Exception:
+        return False
+    try:
+        return proc.wait(timeout=5) == 0
+    except subprocess.TimeoutExpired:
+        # SIGTERM first so the fingerprint helper can remove its temp index,
+        # then SIGKILL whatever is left in the group.
+        import signal
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except Exception:
+            proc.terminate()
+        # Wait for the whole group to drain, not just the leader (sh exits
+        # at once on SIGTERM while python is still removing its temp dir).
+        import time
+        deadline = time.monotonic() + 1.5
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(proc.pid, 0)
+            except Exception:
+                break
+            try:
+                proc.poll()
+            except Exception:
+                pass
+            time.sleep(0.05)
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+        try:
+            proc.wait(timeout=1)
+        except Exception:
+            pass
+        return False
+    except Exception:
+        return False
 
 
 def _is_spec_only_commit(cwd):
@@ -364,7 +429,7 @@ def main():
     if ship_ctx:
         contexts.append(ship_ctx)
 
-    verify_ctx = check_verification_gate(tool_name, tool_input, session_id, cwd)
+    verify_ctx = check_verification_gate(tool_name, tool_input, cwd)
     if verify_ctx:
         contexts.append(verify_ctx)
 

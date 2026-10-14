@@ -1,5 +1,5 @@
 ---
-description: "Autonomous full-cycle workflow: specify through verify with configurable oversight levels, auto-fix, and optional PR creation"
+description: "Autonomous full-cycle workflow: specify through review-code with configurable oversight levels, auto-fix, and optional PR creation"
 ---
 
 # Autonomous Full-Cycle Workflow (speckit-spex-ship)
@@ -23,7 +23,7 @@ The pipeline is ONE continuous task. It starts at the first stage and runs throu
 
 ## Overview
 
-This skill chains the entire spex workflow autonomously: specify, clarify, review-spec, plan, review-plan, tasks, implement, deep-review, and verify. Point it at a brainstorm document and choose an oversight level to control how much human oversight the pipeline requires.
+This skill chains the entire spex workflow autonomously: specify, clarify, review-spec, plan, tasks, review-plan, implement, and review-code (with deep review). The last stage is review-code; verification runs afterwards in `/speckit-spex-finish` or `/speckit-spex-submit`, whichever the completion prompt leads to. Point it at a brainstorm document and choose an oversight level to control how much human oversight the pipeline requires.
 
 **This skill requires both `spex-gates` and `spex-deep-review` extensions to be enabled.**
 
@@ -225,7 +225,7 @@ export SHIP_STATE_FILE="$(pwd -P)/.specify/.spex-state"
 SHIP_STATE_FILE="$SHIP_STATE_FILE" "$SHIP_STATE" advance
 ```
 
-This advances `stage` and `stage_index` to the next stage with `status: running`. After the final stage (verify), `advance` automatically removes the state file and outputs `PIPELINE_COMPLETE`.
+This advances `stage` and `stage_index` to the next stage with `status: running`. After the final stage (review-code), `advance` automatically removes the state file and outputs `PIPELINE_COMPLETE`.
 
 **Do NOT manually write JSON to the state file. Always use the script.**
 
@@ -392,7 +392,6 @@ Do NOT apply "smart" behavior to the pipeline flow itself:
 - Do NOT decide that a brainstorm file is "clear enough" to skip clarify
 - Do NOT decide that a spec is "simple enough" to skip review-spec
 - Do NOT decide that implementation is "straightforward enough" to skip review-code
-- Do NOT skip verify because all prior reviews passed
 
 The `--ask` flag controls oversight within review stages (how findings are handled). It does NOT control which stages run. ALL stages run regardless of the ask level.
 
@@ -425,7 +424,7 @@ Output a brief status message confirming the pipeline configuration before runni
 ## speckit-spex-ship starting
 
 - **Brainstorm**: <file>
-- **Starting stage**: <stage> (<index>/9)
+- **Starting stage**: <stage> (<index>/8)
 - **Oversight**: <ask-level>
 - **State file**: .specify/.spex-state (created)
 ```
@@ -808,7 +807,7 @@ After `PIPELINE_COMPLETE`, the pipeline is done. Present the user with a choice 
    - multiSelect: false
    - Options:
      - "Submit PR (Recommended)": "Push branch and create a pull request for team review"
-     - "Merge directly": "Run /speckit-spex-finish to walk through, squash, and merge to main"
+     - "Merge directly": "Run /speckit-spex-finish to verify, walk through, squash, and merge to main"
      - "Stop here": "Do nothing now. Run /speckit-spex-submit or /speckit-spex-finish later"
 
    {harness:interactive-choice-must} Do NOT output the options as text and wait for a free-form reply.
@@ -827,10 +826,11 @@ After `PIPELINE_COMPLETE`, the pipeline is done. Present the user with a choice 
 
    Invoke `/speckit-spex-finish` directly in the current session.
 
-   After finish completes, output:
+   Finish runs verification first. After finish completes, output:
    ```
    Pipeline complete. Code landed on main.
    ```
+   If finish stopped at verification, relay its stop message instead (nothing was squashed or merged).
 
 4. **If "Stop here":**
 
@@ -840,14 +840,14 @@ After `PIPELINE_COMPLETE`, the pipeline is done. Present the user with a choice 
 
    When ready:
      /speckit-spex-submit    Push and create PR
-     /speckit-spex-finish    Walkthrough + squash + merge to main
+     /speckit-spex-finish    Verify + walkthrough + squash + merge to main
    ```
 
 5. **STOP.**
 
 ## Oversight Decision Logic
 
-After each review stage (review-spec, review-plan, review-code, finish), evaluate the findings:
+After each review stage (review-spec, review-plan, review-code), evaluate the findings:
 
 ### Finding Classification
 

@@ -218,10 +218,11 @@ EXPECTED_EXT_COMMANDS=(
   "spex/commands/speckit.spex.brainstorm.md"
   "spex/commands/speckit.spex.extensions.md"
   "spex/commands/speckit.spex.flow-state.md"
+  "spex/commands/speckit.spex.finish.md"
   "spex-gates/commands/speckit.spex-gates.review-code.md"
   "spex-gates/commands/speckit.spex-gates.review-spec.md"
   "spex-gates/commands/speckit.spex-gates.review-plan.md"
-  "spex-gates/commands/speckit.spex-gates.stamp.md"
+  "spex-gates/commands/speckit.spex-gates.verify.md"
   "spex-worktrees/commands/speckit.spex-worktrees.manage.md"
   "spex-deep-review/commands/speckit.spex-deep-review.run.md"
   "spex-collab/commands/speckit.spex-collab.reviewers.md"
@@ -237,6 +238,17 @@ if [[ -n "$PLUGIN_CACHE_BASE" ]] && [[ -d "$EXT_DIR" ]]; then
       pass "Command present: $cmd_path"
     else
       fail "Command missing: $cmd_path"
+    fi
+  done
+  # Removed commands must not ship (spec 055: the stamp command merged into finish)
+  REMOVED_EXT_COMMAND_GLOBS=(
+    "spex-gates/commands/*stamp*"
+  )
+  for cmd_glob in "${REMOVED_EXT_COMMAND_GLOBS[@]}"; do
+    if compgen -G "$EXT_DIR/$cmd_glob" >/dev/null; then
+      fail "Removed command still present: $cmd_glob"
+    else
+      pass "Removed command absent: $cmd_glob"
     fi
   done
 else

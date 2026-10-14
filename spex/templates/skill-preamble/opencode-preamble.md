@@ -13,7 +13,7 @@ Verify the invoked command is a known spex or speckit command:
 
 **spex commands**: brainstorm, constitution, evolve, help, init,
 review-code, review-plan, review-spec, ship, extensions,
-deep-review, stamp, verify, worktree
+deep-review, verify, worktree
 
 **speckit commands**: /speckit-specify, /speckit-plan, /speckit-tasks, /speckit-implement
 

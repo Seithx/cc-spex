@@ -34,7 +34,7 @@ WORKFLOW
            │     │                         ┌──────────┐
            │     │                         │  FINISH  │
            │     │                         └──────────┘
-           │     │                        /speckit-spex-finish
+           │     │                        /speckit-spex-finish (verify + land)
            │     │                                 ▼
            │     │                         ╔══════════╗
            │     └────────────────────────▶║ COMPLETE ║
@@ -190,9 +190,10 @@ spex COMMANDS (helpers and configuration)
                                 Flags: --watch
                                 --watch: monitor CI after PR, auto-fix failures,
                                          triage comments (if spex-collab enabled)
-  /speckit-spex-finish        Walkthrough gate + squash + merge/keep (land the code)
-                                Flags: --no-walkthrough, --skip-archive
-                                Reads the runbook status; offers to run or resume it when
+  /speckit-spex-finish        Verify + walkthrough gate + squash + merge/keep (land the code)
+                                Flags: --no-verify, --no-walkthrough, --skip-archive
+                                Runs verification first and stops on failure.
+                                Then reads the runbook status; offers to run or resume it when
                                 not passed, squashes commits, merges or keeps.
                                 When spex-detach enabled: archives specs to sibling repo and
                                 preserves the spec dir back to main before removing the worktree
@@ -202,7 +203,7 @@ spex COMMANDS (helpers and configuration)
   /speckit-spex-review-plan   Validate plan coverage, task quality, red flags
   /speckit-spex-gates-review-code  Check code compliance against spec
                                 (includes spec-declared constants drift check)
-  /speckit-spex-stamp         Verification only (use /speckit-spex-finish for full flow)
+  /speckit-spex-gates-verify  Verification only (finish runs it first)
   /speckit-spex-evolve        Reconcile spec/code drift
   /speckit-spex-clear         Clear stuck state, dismiss status line
   /speckit-spex-help          This quick reference
@@ -215,19 +216,23 @@ CLOSING OUT A FEATURE (after review passes)
     1. /speckit-spex-submit          Push and create PR for team review
        /speckit-spex-submit --watch  Same, plus monitor CI and triage comments
     2. (PR review and approval happen externally)
-    3. /speckit-spex-finish          Walkthrough + squash + merge
+    3. /speckit-spex-finish          Verify + walkthrough gate + squash + merge/keep
 
   Direct merge path (solo or small fixes):
-    1. /speckit-spex-finish          Walkthrough + squash + merge to main
+    1. /speckit-spex-finish          Verify + walkthrough gate + squash + merge/keep
 
   /speckit-spex-submit verifies code, commits outstanding changes,
   creates (or pushes to) a PR with spec-linked body and REVIEWERS.md.
   Watch mode polls CI, auto-fixes failures, and triages review comments.
 
-  /speckit-spex-finish checks the walkthrough gate (runs it if needed,
-  skips if already completed at current commit), squashes all commits into
-  one with a conventional commit message, and merges to main with
-  worktree cleanup. Use --no-walkthrough to skip the gate.
+  /speckit-spex-finish first runs /speckit-spex-gates-verify and stops
+  before squash or merge if any gate fails (it skips the run when a pass is
+  already recorded for the current code). It then checks the walkthrough
+  gate (runs it if needed, skips if already completed at current commit),
+  squashes all commits into one with a conventional commit message, and
+  merges to main with worktree cleanup, or keeps the branch.
+  Use --no-verify to skip verification and --no-walkthrough to skip the
+  walkthrough gate.
 
   Extensions are managed via the specify CLI:
     specify extension enable <name>    Enable an extension
@@ -345,7 +350,7 @@ BACKPRESSURE CONFIGURATION (.specify/extensions/spex/spex-config.yml)
   Test command auto-detected: Makefile, package.json, go.mod, pytest, cargo.
   Mid-impl review checkpoints at 1/3 and 2/3 (requires spex-deep-review, 3+ tasks).
   Agent leaderboard with MVP shown after every deep review run.
-  Ship Stage 8 presents a choice: submit PR, merge directly, or stop.
+  At the end of the pipeline, ship presents a choice: submit PR, merge directly, or stop.
   The walkthrough is now a gate inside /speckit-spex-finish (not a pipeline stage).
   Watch mode runs during /speckit-spex-submit (with --watch flag).
   Watch monitors CI, auto-fixes failures (max 2 attempts), and triages

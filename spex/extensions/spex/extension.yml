@@ -18,7 +18,7 @@ provides:
       description: "Refine rough ideas into executable specifications through collaborative questioning"
     - name: speckit.spex.ship
       file: commands/speckit.spex.ship.md
-      description: "Autonomous full-cycle workflow: specify through verify with configurable oversight"
+      description: "Autonomous full-cycle workflow: specify through review-code with configurable oversight"
     - name: speckit.spex.help
       file: commands/speckit.spex.help.md
       description: "Quick reference for all spex commands and workflow"

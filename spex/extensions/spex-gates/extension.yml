@@ -25,9 +25,6 @@ provides:
     - name: speckit.spex-gates.verify
       file: commands/speckit.spex-gates.verify.md
       description: "Final verification gate: tests, code hygiene, spec compliance, drift check"
-    - name: speckit.spex-gates.stamp
-      file: commands/speckit.spex-gates.stamp.md
-      description: "Stamp command - invokes verification before completion"
 
 hooks:
   after_specify:

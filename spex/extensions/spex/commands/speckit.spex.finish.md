@@ -1,9 +1,9 @@
 ---
-description: "Walkthrough + squash + merge/keep (land the code on main)"
-argument-hint: "[--auto] [--no-walkthrough] [--skip-archive]"
+description: "Verify + walkthrough + squash + merge/keep (land the code on main)"
+argument-hint: "[--auto] [--no-verify] [--no-walkthrough] [--skip-archive]"
 ---
 
-# Finish - Walkthrough, Squash, and Land the Code
+# Finish - Verify, Walkthrough, Squash, and Land the Code
 
 ## Ship Pipeline Guard
 
@@ -29,21 +29,87 @@ In autonomous mode: suppress all interactive prompts, UNLESS running inside a wo
 Parse the following flags from arguments:
 
 - If `--auto` is passed, set `AUTO_MODE=true`. This suppresses all interactive prompts and uses defaults (same behavior as the ship pipeline's autonomous mode).
+- If `--no-verify` is passed, set `SKIP_VERIFY=true`. This skips the verification phase (Phase 0) and prints a one-line note.
 - If `--no-walkthrough` is passed, set `SKIP_WALKTHROUGH=true`. This bypasses the walkthrough gate unconditionally.
 - If `--skip-archive` is passed, set `SKIP_ARCHIVE=true`. This skips the archive step when spex-detach is enabled.
 
 ```bash
 AUTO_MODE=false
+SKIP_VERIFY=false
 SKIP_WALKTHROUGH=false
 SKIP_ARCHIVE=false
 for arg in "$@"; do
   case "$arg" in
     --auto) AUTO_MODE=true ;;
+    --no-verify) SKIP_VERIFY=true ;;
     --no-walkthrough) SKIP_WALKTHROUGH=true ;;
     --skip-archive) SKIP_ARCHIVE=true ;;
   esac
 done
+
+# --auto always means unattended, even without ship state (the guard above
+# may have run before AUTO_MODE was set).
+[ "$AUTO_MODE" = true ] && AUTONOMOUS_MODE=true
 ```
+
+## Phase 0: Verification
+
+Verification is the first phase. It runs before the `before_finish` extension hooks (for example, the detach archive hook), the walkthrough gate, squash, archive, and any merge, PR, or keep action, so nothing acts on unverified code.
+
+### Step 1: Resolve the feature directory
+
+Resolve `FEATURE_DIR` once. Phase 1 and every later phase reuse this value instead of re-deriving it.
+
+```bash
+FEATURE_DIR=$(jq -r '.spec_dir // empty' .specify/.spex-state 2>/dev/null)
+[ -n "$FEATURE_DIR" ] || FEATURE_DIR=$(jq -r '.feature_directory // empty' .specify/feature.json 2>/dev/null)
+[ -n "$FEATURE_DIR" ] || FEATURE_DIR="specs/$(git rev-parse --abbrev-ref HEAD)"
+FEATURE_DIR="${FEATURE_DIR%/}"
+
+RECORD=".specify/extensions/spex/scripts/spex-verify-record.sh"
+[ -f "$RECORD" ] || RECORD="spex/scripts/spex-verify-record.sh"
+
+# Verify belongs to spex-gates, which may be disabled or not installed.
+GATES_ENABLED=$(jq -r '.extensions["spex-gates"].enabled // false' .specify/extensions/.registry 2>/dev/null)
+[ "$GATES_ENABLED" = "true" ] || GATES_ENABLED=false
+```
+
+### Step 2: Apply the verification table
+
+Evaluate the rows top to bottom; the first matching row wins. Print the exact output shown.
+
+| Condition | Output (exact first line) | Result |
+|---|---|---|
+| `SKIP_VERIFY` is true (`--no-verify`) | `Verification skipped (--no-verify).` | `VERIFY_RESULT=skipped-flag`, continue |
+| `GATES_ENABLED` is not `true` (the `spex-gates` entry in `.specify/extensions/.registry` is missing or disabled) | `Verification skipped: spex-gates is not enabled.` | `VERIFY_RESULT=skipped-no-gates`, continue |
+| `sh "$RECORD" check --feature "$FEATURE_DIR"` exits 0 (a pass is recorded for the current code state) | `Verification already passed for this code.` | `VERIFY_RESULT=already-verified`, continue (verify is not re-run) |
+| `$FEATURE_DIR/spec.md` does not exist (`[ ! -f "$FEATURE_DIR/spec.md" ]`) and `AUTONOMOUS_MODE` is true | `Finish stopped: no spec found for verification.` then `Run /speckit-spex-finish --no-verify to land without verification.` | `VERIFY_RESULT=no-spec`, **stop** |
+| `$FEATURE_DIR/spec.md` does not exist and the run is interactive | Invoke `/speckit-spex-gates-verify --embedded` without a spec path, so verify resolves the spec through its normal selection (including its picker); then apply the result rows below. If verify reports `NO_SPEC`, print the no-spec stop message from the row above and **stop**. | see the result rows |
+| Invoke `/speckit-spex-gates-verify --embedded "$FEATURE_DIR/spec.md"` (append `--auto` when `AUTONOMOUS_MODE` is true); its gate result is PASS | `Verification passed.` | `VERIFY_RESULT=passed`, continue; set `VERIFY_RECORDED=false` when its result block has `warning: pass not recorded`, else `VERIFY_RECORDED=true` |
+| Verify reports one or more failing gates (`VERIFY_RESULT` status `FAIL`) | the gate-failure stop message below | `VERIFY_RESULT=failed`, **stop** |
+| Verify did not complete (status `ERROR`, it was interrupted, or it produced no clear PASS or FAIL); a verify `NO_SPEC` result uses the no-spec row above | `Finish stopped: verification did not complete.` then the error on one line, then `To land without verification: /speckit-spex-finish --no-verify` | `VERIFY_RESULT=incomplete`, **stop** |
+
+Pass the spec path explicitly, as shown, so verify checks and records exactly the `FEATURE_DIR` that finish resolved. When verify selected the spec itself (interactive row above), set `FEATURE_DIR` to the `feature` that verify reports in its `VERIFY_RESULT` block, so later phases use the verified spec. Pass `--auto` to verify whenever `AUTONOMOUS_MODE` is true, so verify also runs without prompts (it would otherwise detect unattended mode only from `.specify/.spex-state`, not from finish's own `--auto`). `--embedded` keeps `.specify/.spex-state` in place and suppresses verify's completion banner; finish owns state cleanup (Phase 6). Verify records the pass for the current code state itself; finish never writes the record.
+
+**Gate-failure stop message** (exact shape; one line per failing gate, using the gate names verify reports: `closeout`, `tests`, `code hygiene`, `spec compliance`, `spec drift`, `success criteria`):
+
+```text
+Finish stopped: verification did not pass.
+  - <gate name>: <one-line reason>
+  - <gate name>: <one-line reason>
+Fix the issues and rerun /speckit-spex-finish, or reconcile the spec with /speckit-spex-evolve.
+To land without verification: /speckit-spex-finish --no-verify
+```
+
+**On any stop row**: STOP immediately. Do not run the `before_finish` hooks or any later phase. Nothing is squashed or committed, no branch is switched, no worktree is changed or removed, and `.specify/.spex-state` is left untouched. There is no "continue anyway" option in any mode.
+
+**Unattended mode** (`AUTONOMOUS_MODE` true, from the Ship Pipeline Guard): apply the same table without any prompt. Stop rows still stop; finish never continues to squash or merge after a failed or incomplete verification.
+
+Only `VERIFY_RESULT` values `skipped-flag`, `skipped-no-gates`, `already-verified`, and `passed` let finish continue to the `before_finish` hooks and Phase 1.
+
+The recorded pass is tied to the code state, not the session: it survives `/clear` and new sessions, and any change outside `specs/` and `brainstorm/` (committed or not) invalidates it, so the record check fails and verify runs again. Committing already-verified content (including finish's own commit in Phase 3) keeps it valid.
+
+`--no-verify` combines freely with `--no-walkthrough`, `--auto`, and `--skip-archive`; each skipped phase prints its own note.
 
 ## Pre-Execution Checks
 
@@ -97,14 +163,13 @@ if [ "$SKIP_WALKTHROUGH" = true ]; then
 fi
 ```
 
-### Step 2: Resolve the feature and read runbook status
+### Step 2: Read runbook status
+
+Use the `FEATURE_DIR` resolved in Phase 0 Step 1 (do not re-derive it).
 
 ```bash
 STATUS=".specify/extensions/spex/scripts/spex-runbook-status.sh"
 [ -f "$STATUS" ] || STATUS="spex/scripts/spex-runbook-status.sh"
-
-FEATURE_DIR=$(jq -r '.spec_dir // empty' .specify/.spex-state 2>/dev/null)
-[ -n "$FEATURE_DIR" ] || FEATURE_DIR="specs/$(git rev-parse --abbrev-ref HEAD)"
 
 SHOW=$("$STATUS" show "$FEATURE_DIR")
 WT_STATUS=$(printf '%s' "$SHOW" | jq -r '.status // "missing"')
@@ -156,7 +221,30 @@ Parse the JSON output to extract context variables:
 
 Squash all feature branch commits into a single commit with a conventional commit message.
 
+### Step 0: Re-check verification before staging
+
+The `before_finish` hooks and the walkthrough (Phase 1) run after Phase 0 and may change code (for example a fix made during the walkthrough). Before anything is staged, confirm the verified pass still covers the current code. Skip this step when `VERIFY_RESULT` is `skipped-flag` or `skipped-no-gates`, and when verify reported PASS with `warning: pass not recorded` (`VERIFY_RECORDED=false`: there is no record to compare against, and verification already ran in this finish).
+
+```bash
+RECHECK=skip
+if { [ "$VERIFY_RESULT" = passed ] || [ "$VERIFY_RESULT" = already-verified ]; } \
+   && [ "${VERIFY_RECORDED:-true}" != false ]; then
+  sh "$RECORD" check --feature "$FEATURE_DIR" >/dev/null 2>&1
+  case $? in
+    0) RECHECK=current ;;
+    1) RECHECK=stale ;;
+    *) RECHECK=unavailable ;;
+  esac
+fi
+```
+
+- `RECHECK=current` or `skip`: continue to Step 1.
+- `RECHECK=unavailable` (the record check itself errored): print `Verification record unavailable; verifying again.` and continue as for `stale`.
+- `RECHECK=stale`: print `Code changed after verification; verifying again.` and apply the Phase 0 Step 2 table again from the verify-invocation row onward (the `--no-verify`, spex-gates, and record rows do not apply here). A pass continues to Step 1. Any stop row stops finish with its exact stop message, before anything is staged or committed.
+
 ### Step 1: Commit outstanding changes
+
+When Phase 0 passed, found a recorded pass, `--no-verify` was given, or spex-gates is not enabled (`VERIFY_RESULT` is `passed`, `already-verified`, `skipped-flag`, or `skipped-no-gates`), make this commit without stopping to confirm the pre-commit verification reminder. The reminder is advisory context; Phase 0 already settled verification for this run.
 
 ```bash
 git add -A
@@ -214,14 +302,14 @@ MERGE_BASE=$(git merge-base "$DEFAULT_BRANCH" HEAD)
 COMMIT_COUNT=$(git rev-list --count "$MERGE_BASE"..HEAD)
 ```
 
-### Step 3: Single commit — skip squash
+### Step 3: Single commit, skip squash
 
 If `COMMIT_COUNT` is 1, skip the squash step entirely. The branch already has a single commit.
 
 ### Step 4: Generate conventional commit message
 
 Read context to generate the message:
-- The spec's feature name and key requirements from `specs/<branch>/spec.md`
+- The spec's feature name and key requirements from `$FEATURE_DIR/spec.md` (resolved in Phase 0)
 - The git diff summary: `git diff --stat "$MERGE_BASE"..HEAD`
 - The list of changed files to determine scope
 
@@ -251,6 +339,8 @@ Present the generated commit message to the user. They can:
 In autonomous mode: use the generated message without prompting.
 
 ### Step 6: Execute squash
+
+As in Step 1, finish's own squash commit does not stop to confirm the pre-commit verification reminder when Phase 0 passed, found a recorded pass, `--no-verify` was given, or spex-gates is not enabled. (The user's approval of the message in Step 5 is unchanged.)
 
 ```bash
 git reset --soft "$MERGE_BASE"
@@ -353,7 +443,7 @@ ACTION_TAKEN="merge"
 # detach is off.
 PRESERVE=".specify/extensions/spex/scripts/spex-finish-preserve-specs.sh"
 [ -f "$PRESERVE" ] || PRESERVE="spex/scripts/spex-finish-preserve-specs.sh"
-# Use the Phase 1-resolved FEATURE_DIR (the spec dir finish actually operated on),
+# Use the Phase 0-resolved FEATURE_DIR (the spec dir finish actually operated on),
 # not a re-derived specs/$CURRENT_BRANCH, so preservation never misses the dir when
 # the spec directory name differs from the branch name.
 "$PRESERVE" "$WORKTREE_PATH" "$MAIN_WORKTREE" "${FEATURE_DIR:-specs/$CURRENT_BRANCH}" || true

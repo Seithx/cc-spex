@@ -295,7 +295,7 @@ render_ship() {
     review-plan)  EMOJI="✅"; COLOR="$MAGENTA";;
     implement)    EMOJI="🔨"; COLOR="$YELLOW";;
     review-code)  EMOJI="🔎"; COLOR="$MAGENTA";;
-    stamp|finish) EMOJI="🏁"; COLOR="$GREEN";;
+    finish) EMOJI="🏁"; COLOR="$GREEN";;
     done)         EMOJI="✅"; COLOR="$GREEN";;
     *)            EMOJI="⚙️"; COLOR="$WHITE";;
   esac

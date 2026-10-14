@@ -2,7 +2,6 @@
   "harness": "claude",
   "version": "2.0.0",
   "tokens": {
-    "suppress-prompts-stamp": "suppress all user prompts (do NOT use AskUserQuestion), complete the stamp",
     "suppress-prompts-verify": "suppress all user prompts (do NOT use AskUserQuestion), complete the verification",
     "interactive-choice": "present the choice using `AskUserQuestion`",
     "interactive-choice-skip": "using AskUserQuestion (skip in autonomous mode)",

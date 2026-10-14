@@ -8,13 +8,15 @@
 #   result=$(sh verify-gate.sh <tool_name> <command> <session_id> <cwd>)
 #   # result is "context:<text>" or "allow"
 #
-# Reads .specify/.spex-state and $TMPDIR marker files
+# Reads .specify/.spex-state and the shared verification record via
+# spex-verify-record.sh check (the same record finish reads; it is tied to the
+# code state, not the session, so it survives /clear and new sessions).
 
 set -eu
 
 TOOL_NAME="${1:-}"
 COMMAND="${2:-}"
-SESSION_ID="${3:-unknown}"
+SESSION_ID="${3:-unknown}"  # unused; kept for the adapter call interface
 CWD="${4:-.}"
 
 # Only applies to Bash tool
@@ -34,14 +36,6 @@ esac
 
 # Only applies in spex projects
 if [ ! -d "$CWD/.specify" ]; then
-  echo "allow"
-  exit 0
-fi
-
-# Skip if already verified this session
-TMPDIR="${TMPDIR:-/tmp}"
-VERIFIED_MARKER="$TMPDIR/.claude-spex-verified-$SESSION_ID"
-if [ -f "$VERIFIED_MARKER" ]; then
   echo "allow"
   exit 0
 fi
@@ -75,4 +69,14 @@ if command -v git >/dev/null 2>&1; then
   fi
 fi
 
-echo "context:spex stamp reminder: Final verification has not been run this session. Consider running /speckit-spex-gates-stamp first, or confirm with the user that they want to proceed without the final gate."
+# Skip if a verification pass is recorded for the current code state.
+# Runs last because it hashes the working tree; the cheap skips above go
+# first. Missing script or any error means "not verified" (the reminder fires).
+RECORD="$(dirname "$0")/../../spex-verify-record.sh"
+[ -f "$RECORD" ] || RECORD="$CWD/.specify/extensions/spex-gates/scripts/spex-verify-record.sh"
+if [ -f "$RECORD" ] && (cd "$CWD" && sh "$RECORD" check >/dev/null 2>&1); then
+  echo "allow"
+  exit 0
+fi
+
+echo "context:spex verify reminder: No verification is recorded for the current code. Consider running /speckit-spex-gates-verify or /speckit-spex-finish first, or confirm with the user that they want to proceed without the final gate."
