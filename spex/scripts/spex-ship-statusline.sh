@@ -290,14 +290,14 @@ render_ship() {
     specify)      EMOJI="📝"; COLOR="$CYAN";;
     clarify)      EMOJI="🔍"; COLOR="$BLUE";;
     review-spec)  EMOJI="🔬"; COLOR="$MAGENTA";;
-    plan)         EMOJI="🗺"; COLOR="$GREEN";;
+    plan)         EMOJI="🗺️"; COLOR="$GREEN";;
     tasks)        EMOJI="📋"; COLOR="$GREEN";;
     review-plan)  EMOJI="✅"; COLOR="$MAGENTA";;
     implement)    EMOJI="🔨"; COLOR="$YELLOW";;
     review-code)  EMOJI="🔎"; COLOR="$MAGENTA";;
     stamp|finish) EMOJI="🏁"; COLOR="$GREEN";;
     done)         EMOJI="✅"; COLOR="$GREEN";;
-    *)            EMOJI="⚙"; COLOR="$WHITE";;
+    *)            EMOJI="⚙️"; COLOR="$WHITE";;
   esac
 
   # Build progress bar
@@ -310,7 +310,7 @@ render_ship() {
   # Ask level indicator
   local ASK_ICON=""
   case "$ASK" in
-    always) ASK_ICON="👁";;
+    always) ASK_ICON="👁️";;
     smart)  ASK_ICON="🧠";;
     never)  ASK_ICON="🚀";;
   esac
