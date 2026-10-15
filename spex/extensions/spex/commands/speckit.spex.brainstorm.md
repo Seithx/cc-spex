@@ -169,7 +169,18 @@ After the brainstorm document is written and overview updated, {harness:interact
 
 If the user chooses "Specify step-by-step": invoke `/speckit-specify` with the brainstorm document as context.
 
-If the user chooses "Ship autonomously": invoke `/speckit-spex-ship` with the brainstorm document path as argument.
+If the user chooses "Ship autonomously": before invoking ship, {harness:interactive-choice} to pick the oversight level, which controls how and when the pipeline stops for questions:
+
+- header: "Oversight"
+- multiSelect: false
+- Options:
+  - "Smart (Recommended)": "Auto-fix clear-cut review findings, pause on ambiguous ones (design, API, requirement interpretation) and blockers"
+  - "Always ask": "Pause on every review finding and ask clarification questions interactively. Most control, slowest."
+  - "Never ask": "Auto-fix everything that can be fixed, pause only on blockers (failing tests, security issues, contradictions)"
+
+{harness:interactive-choice-must}
+
+Then invoke `/speckit-spex-ship` with the brainstorm document path and the matching flag: `--ask smart`, `--ask always`, or `--ask never`.
 
 If the user chooses "Done for now": end the session.
 
@@ -690,4 +701,16 @@ I'll save this as a brainstorm document. How would you like to proceed?
 A) Specify step-by-step (/speckit-specify)
 B) Ship autonomously (/speckit-spex-ship)
 C) Done for now
+
+User: B
+
+You: Which oversight level should ship use?
+
+A) Smart (Recommended): auto-fix clear findings, pause on ambiguous ones
+B) Always ask: pause on every finding
+C) Never ask: pause only on blockers
+
+User: A
+
+[Invokes /speckit-spex-ship brainstorm/NN-comments.md --ask smart]
 ```
