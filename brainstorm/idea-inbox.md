@@ -76,6 +76,15 @@ _Review-related ideas (goal-alignment-skip-behavior, spec-completeness, platform
 
 > `--no-git` already avoids the expensive fingerprint path, so this is Python startup latency, not git latency. For a per-render hot path consider parsing the runbook status inline with jq/awk, or caching the walkthrough segment keyed by the runbook's mtime so Python runs only when the file changed.
 
+### openspec-style-proposal-short-run
+
+- **Source**: conversation (morning-paper Context Engineering signal, 2026-10-14)
+- **Date**: 2026-10-14
+- **Reference**: future brainstorm
+- **Summary**: Add a lightweight `propose` short-run inspired by OpenSpec's delta-proposal model (propose -> apply -> archive), as a fast path for small changes against an existing spec, alongside the current full-spec governance pipeline.
+
+> OpenSpec (Fission-AI) treats SDD as small change proposals moving through a propose/apply/archive state machine, each describing only the delta against current behavior, no full spec per change. That wins on brownfield work where authoring and maintaining a complete spec is expensive. spex today is full-spec/governance-heavy (brainstorm -> specify -> plan -> implement, flow-state gated), which is the Spec Kit end of the spectrum. The idea: a `propose` command that starts a short run, captures the delta against the current spec, generates a minimal change proposal (not a full spec), runs a trimmed gate set, then `apply` (fold the delta into the canonical spec) and `archive` the proposal. The two modes are complementary: heavy pipeline for features, short-run for deltas. Open questions: where the canonical "current spec" lives and how `apply` reconciles overlapping proposals; whether proposals get their own flow-state lane; keeping the short-run and the full pipeline from drifting in command vocabulary (cf. 038-neutral-command-vocab). The unsolved part of the delta model generally is reconciliation: an append-only changelog of intent eventually needs a materialized current-state view, same tension as CRD/API schema evolution. See Obsidian insight `openspec-delta-proposal-model`.
+
 ### preserve-detach-error-handling
 
 - **Source**: deep-review
@@ -165,3 +174,21 @@ _Review-related ideas (goal-alignment-skip-behavior, spec-completeness, platform
 - **Summary**: No test pins FR-009d (the verification record survives `/speckit-spex-clear` and state cleanup).
 
 > Add a test that applies spex-init's exclude patterns, records, then creates and deletes `.specify/.spex-state`, and asserts the record is still verified.
+
+### custom-branch-repair-gap
+
+- **Source**: deep-review
+- **Date**: 2026-10-16
+- **Reference**: 056-worktree-with-branch
+- **Summary**: The main-checkout finalize repair and adopt only handle feature-pattern branches, while late mode and finalize accept exact custom `--branch` names.
+
+> A custom `--branch` plus a cwd reset ends with `not-on-a-feature-branch` and no hint about the prepared worktree; let the repair match the prepare marker's planned branch instead of the pattern.
+
+### upstream-hook-priority-order
+
+- **Source**: deep-review
+- **Date**: 2026-10-16
+- **Reference**: 056-worktree-with-branch
+- **Summary**: The hook-order window for worktree-first specify only closes for good when spec-kit dispatches hooks by priority.
+
+> Follow up on specs/056-worktree-with-branch/upstream-proposal.md once upstream answers, then drop late mode if possible.
