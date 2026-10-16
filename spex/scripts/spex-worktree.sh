@@ -4,8 +4,12 @@
 # Usage:
 #   spex-worktree.sh prepare --short-name <name> [--description <text>] [--branch <exact-name>]
 #       Create the feature worktree before the spec is written (before_specify).
+#       Without an exact branch the directory gets a provisional name
+#       (.pending-<short-name>-<random>); the branch itself is always created
+#       later by the git extension's hook, inside the worktree.
 #   spex-worktree.sh finalize
-#       Confirm branch, worktree directory, feature.json and state (after_specify).
+#       Confirm branch, worktree directory, feature.json and state, and rename
+#       a provisional directory after the branch (after_specify).
 #   spex-worktree.sh adopt
 #       Legacy path: move a feature branch checked out in the main checkout
 #       into a new worktree (finalize fallback, ensure action).
@@ -24,12 +28,12 @@ set -euo pipefail
 
 REGISTRY_REL=".specify/extensions/.registry"
 WORKTREE_CONFIG_REL=".specify/extensions/spex-worktrees/worktree-config.yml"
-# The git extension's branch script. Newer spec-kit releases renamed it to
-# create-new-feature-branch.sh; older ones ship create-new-feature.sh. Both
-# take the same flags and print the same JSON. First match wins.
-GIT_FEATURE_SCRIPT_DIR_REL=".specify/extensions/git/scripts/bash"
-GIT_FEATURE_SCRIPT_NAMES=(create-new-feature-branch.sh create-new-feature.sh)
 STATE_REL=".specify/.spex-state"
+# Directory name prefix of a worktree whose branch does not exist yet. prepare
+# never computes the branch name itself (that is the git extension's job), so
+# an early-mode worktree starts as `.pending-<short-name>-<random>` and
+# finalize renames it after git.feature created the branch inside it.
+PENDING_PREFIX=".pending-"
 DEFAULT_BASE_PATH=".claude/worktrees"
 ADOPT_NOTE=""
 
@@ -210,19 +214,6 @@ in_linked_worktree() {
   [ "$git_dir" != "$common_dir" ]
 }
 
-# Print the path of the git extension's branch script under <root>, trying
-# each name in GIT_FEATURE_SCRIPT_NAMES. Returns 1 when none exists.
-find_git_feature_script() {
-  local root="$1" name
-  for name in "${GIT_FEATURE_SCRIPT_NAMES[@]}"; do
-    if [ -f "$root/$GIT_FEATURE_SCRIPT_DIR_REL/$name" ]; then
-      printf '%s\n' "$root/$GIT_FEATURE_SCRIPT_DIR_REL/$name"
-      return 0
-    fi
-  done
-  return 1
-}
-
 # True for sequential (NNN-) and timestamp (YYYYMMDD-HHMMSS-) feature branches.
 is_feature_branch() {
   local name="${1:-}"
@@ -326,26 +317,14 @@ move_matching_state() {
   return 0
 }
 
-# Branch numbering mode of the git extension: git-config.yml, then
-# init-options.json, default sequential (same order as speckit.git.feature).
-branch_numbering() {
-  local root="$1" mode=""
-  if [ -f "$root/.specify/extensions/git/git-config.yml" ] && command -v yq >/dev/null 2>&1; then
-    mode=$(yq -r '.branch_numbering // ""' "$root/.specify/extensions/git/git-config.yml" 2>/dev/null || true)
-  fi
-  if { [ -z "$mode" ] || [ "$mode" = "null" ]; } && [ -f "$root/.specify/init-options.json" ]; then
-    mode=$(jq -r '.branch_numbering // ""' "$root/.specify/init-options.json" 2>/dev/null || true)
-  fi
-  case "$mode" in
-    timestamp) echo "timestamp" ;;
-    *) echo "sequential" ;;
-  esac
-}
-
 # Marker files in a linked worktree's own git dir (never tracked, never
-# shared with other worktrees). `spex-prepared` holds the planned branch name
-# and is written by prepare; finalize renames it to `spex-finalized`. Only
-# worktrees carrying one of them were created by this script.
+# shared with other worktrees). prepare writes `spex-prepared`; finalize
+# renames it to `spex-finalized`. Only worktrees carrying one of them were
+# created by this script. The marker holds `key=value` lines:
+#   branch=<name>        exact branch name, empty while it is not known yet
+#                        (early mode without --branch / GIT_BRANCH_NAME)
+#   short_name=<name>    normalized short name of this run, may be empty
+# A marker from an older release holds just the branch name on one line.
 MARKER_PREPARED="spex-prepared"
 MARKER_FINALIZED="spex-finalized"
 # Content hashes of the untracked files prepare put into the worktree.
@@ -356,11 +335,58 @@ worktree_git_dir() {
   git -C "$1" rev-parse --absolute-git-dir 2>/dev/null
 }
 
-# write_prepared_marker <path> <branch>
+# write_prepared_marker <path> <branch-or-empty> <clean-short-name-or-empty>
 write_prepared_marker() {
   local gd
   gd=$(worktree_git_dir "$1") || return 1
-  printf '%s\n' "$2" > "$gd/$MARKER_PREPARED"
+  printf 'branch=%s\nshort_name=%s\n' "$2" "$3" > "$gd/$MARKER_PREPARED"
+}
+
+# marker_field <marker-file> <key>: value of <key>, empty when absent. An
+# old-style marker (one line without `=`) is read as its branch.
+marker_field() {
+  local file="$1" key="$2" first
+  [ -f "$file" ] || return 0
+  first=$(head -1 "$file")
+  case "$first" in
+    *=*) sed -n "s/^$key=//p" "$file" | head -1 ;;
+    *) [ "$key" = branch ] && printf '%s\n' "$first" ;;
+  esac
+  return 0
+}
+
+# random_suffix: six lowercase hex characters.
+random_suffix() {
+  local hex
+  hex=$(od -An -N3 -tx1 /dev/urandom 2>/dev/null | tr -d ' \n' || true)
+  if [[ ! "$hex" =~ ^[0-9a-f]{6}$ ]]; then
+    hex=$(printf '%06x' $(( (RANDOM << 9 ^ RANDOM ^ $$) & 0xffffff )))
+  fi
+  printf '%s\n' "$hex"
+}
+
+# True when <path>'s directory name is a provisional (pending) one, inside
+# the project (`.pending-*`) or external (`<repo>@.pending-*`).
+is_pending_path() {
+  case "$(basename "$1")" in
+    "$PENDING_PREFIX"*|*@"$PENDING_PREFIX"*) return 0 ;;
+  esac
+  return 1
+}
+
+# Oldest reflog entry of a local branch as a unix time; empty without one.
+branch_created_at() {
+  local created
+  created=$(git reflog show --date=unix --format=%gd "refs/heads/$1" -- 2>/dev/null | tail -1 || true)
+  created="${created##*@\{}"
+  created="${created%\}}"
+  [[ "$created" =~ ^[0-9]+$ ]] && printf '%s\n' "$created"
+  return 0
+}
+
+# Modification time of a file as a unix time (GNU and BSD stat).
+file_mtime() {
+  stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
 }
 
 # untracked_manifest <path>: "<blob-hash>\t<path>" for every untracked file
@@ -393,7 +419,7 @@ created_by_prepare() {
 }
 
 # Linked worktrees created by prepare and not finalized yet. Prints
-# `<path>\t<planned-branch>` per line.
+# `<path>\t<branch-or-empty>\t<short-name-or-empty>` per line.
 list_prepared_worktrees() {
   local line path gd first=yes
   while IFS= read -r line; do
@@ -403,7 +429,9 @@ list_prepared_worktrees() {
         if [ "$first" = yes ]; then first=no; continue; fi
         gd=$(worktree_git_dir "$path") || continue
         [ -f "$gd/$MARKER_PREPARED" ] || continue
-        printf '%s\t%s\n' "$path" "$(head -1 "$gd/$MARKER_PREPARED")"
+        printf '%s\t%s\t%s\n' "$path" \
+          "$(marker_field "$gd/$MARKER_PREPARED" branch)" \
+          "$(marker_field "$gd/$MARKER_PREPARED" short_name)"
         ;;
     esac
   done < <(git worktree list --porcelain 2>/dev/null)
@@ -474,10 +502,8 @@ detect_late_branch() {
   [ "$(git worktree list --porcelain | grep -cxF "branch refs/heads/$branch")" = "1" ] || return 0
   # Created moments ago (oldest reflog entry). A stale branch, for example
   # one made by hand long ago, is left alone. Without a reflog, skip this.
-  created=$(git reflog show --date=unix --format=%gd "refs/heads/$branch" -- 2>/dev/null | tail -1 || true)
-  created="${created##*@\{}"
-  created="${created%\}}"
-  if [[ "$created" =~ ^[0-9]+$ ]]; then
+  created=$(branch_created_at "$branch")
+  if [ -n "$created" ]; then
     now=$(date +%s)
     [ $((now - created)) -le "$LATE_WINDOW_SECONDS" ] || return 0
   fi
@@ -506,7 +532,7 @@ detect_late_branch() {
 }
 
 prepare_late() {
-  local branch="$1" default="$2" root prev_name prev_sha path tip created=""
+  local branch="$1" default="$2" short="$3" root prev_name prev_sha path tip created=""
   root=$(current_root)
   prev_name=$(git rev-parse --abbrev-ref '@{-1}' 2>/dev/null || true)
   prev_sha=$(git rev-parse '@{-1}^{commit}')
@@ -555,7 +581,7 @@ prepare_late() {
     late_fail
   fi
   created=yes
-  if ! write_prepared_marker "$path" "$branch"; then
+  if ! write_prepared_marker "$path" "$branch" "$short"; then
     echo "ERROR: could not mark $path as prepared" >&2
     late_fail
   fi
@@ -592,6 +618,11 @@ cmd_prepare() {
     esac
   done
   branch="${branch:-${GIT_BRANCH_NAME:-}}"
+  # --description is accepted for compatibility and not used: prepare never
+  # computes the branch name.
+  : "$description"
+  local short_clean
+  short_clean=$(clean_short_name "$short_name")
 
   local root default=""
   root=$(current_root) || die "not inside a git working tree"
@@ -633,43 +664,31 @@ cmd_prepare() {
     exit 1
   fi
   if [ -n "$LATE_BRANCH" ]; then
-    prepare_late "$LATE_BRANCH" "$default"
+    prepare_late "$LATE_BRANCH" "$default" "$short_clean"
     return 0
   fi
 
-  # 4. Early mode.
-  if [ -z "$branch" ]; then
-    [ -n "$short_name" ] || { echo "ERROR: --short-name or --branch is required" >&2; usage; exit 2; }
-    local feature_script json err
-    if ! feature_script=$(find_git_feature_script "$root"); then
-      echo "ERROR: no git extension branch script found in $GIT_FEATURE_SCRIPT_DIR_REL (looked for: ${GIT_FEATURE_SCRIPT_NAMES[*]}); spex-worktrees requires the spec-kit git extension" >&2
-      echo "Fix: run 'specify extension add git' (or 'specify extension enable git'), or disable spex-worktrees." >&2
-      exit 1
-    fi
-    # Same numbering mode as speckit.git.feature. A timestamp computed now
-    # can differ by a few seconds from the one git.feature computes later;
-    # finalize then moves the worktree directory to match the branch.
-    local numbering_flag=()
-    if [ "$(branch_numbering "$root")" = "timestamp" ]; then
-      numbering_flag=(--timestamp)
-    fi
-    err=$(mktemp)
-    if ! json=$(cd "$root" && bash "$feature_script" --dry-run --json ${numbering_flag[@]+"${numbering_flag[@]}"} --short-name "$short_name" "${description:-$short_name}" 2>"$err"); then
-      echo "ERROR: computing the branch name failed:" >&2
-      cat "$err" >&2
-      rm -f "$err"
-      exit 1
-    fi
-    rm -f "$err"
-    branch=$(printf '%s\n' "$json" | grep '^{' | tail -1 | jq -r '.BRANCH_NAME // empty' 2>/dev/null || true)
-    [ -n "$branch" ] || die "the git extension's dry run returned no BRANCH_NAME"
+  # 4. Early mode. With an exact branch name the worktree is named after it.
+  #    Without one, the branch name is not known before git.feature runs
+  #    inside the worktree (spex never computes it: numbering is the git
+  #    extension's business), so the directory gets a provisional name that
+  #    finalize replaces with the branch name.
+  local path_name
+  if [ -z "$branch" ] && [ -z "$short_clean" ]; then
+    echo "ERROR: --short-name (letters or digits) or --branch is required" >&2
+    usage
+    exit 2
   fi
-
-  git check-ref-format --branch "$branch" >/dev/null 2>&1 || die "invalid branch name '$branch'"
-  if git show-ref --verify --quiet "refs/heads/$branch"; then
-    echo "ERROR: branch '$branch' already exists" >&2
-    echo "Pick a different short name, or remove the branch if it is left over from an earlier run." >&2
-    exit 1
+  if [ -n "$branch" ]; then
+    git check-ref-format --branch "$branch" >/dev/null 2>&1 || die "invalid branch name '$branch'"
+    if git show-ref --verify --quiet "refs/heads/$branch"; then
+      echo "ERROR: branch '$branch' already exists" >&2
+      echo "Pick a different short name, or remove the branch if it is left over from an earlier run." >&2
+      exit 1
+    fi
+    path_name="$branch"
+  else
+    path_name="$PENDING_PREFIX$short_clean-$(random_suffix)"
   fi
 
   local tip path notice=""
@@ -678,7 +697,7 @@ cmd_prepare() {
     notice="NOTICE: main checkout is on '$(describe_head)', new branch starts from '$default'"
   fi
 
-  path=$(compute_worktree_path "$branch") || exit 1
+  path=$(compute_worktree_path "$path_name") || exit 1
   if [ -e "$path" ]; then
     echo "ERROR: target path already exists: $path" >&2
     echo "Remove it, or set a different worktrees.base_path in $WORKTREE_CONFIG_REL." >&2
@@ -691,7 +710,7 @@ cmd_prepare() {
     echo "ERROR: git worktree add failed for $path" >&2
     exit 1
   fi
-  if ! write_prepared_marker "$path" "$branch"; then
+  if ! write_prepared_marker "$path" "$branch" "$short_clean"; then
     remove_partial_worktree "$path"
     echo "ERROR: could not mark $path as prepared; the worktree was removed" >&2
     exit 1
@@ -710,11 +729,19 @@ cmd_prepare() {
   # Best effort: without a manifest, finalize never removes this worktree.
   write_prepared_manifest "$path" || true
 
-  echo "WORKTREE_PREPARED path=$path branch=$branch base=$default mode=early"
+  if [ -n "$branch" ]; then
+    echo "WORKTREE_PREPARED path=$path branch=$branch base=$default mode=early"
+  else
+    echo "WORKTREE_PREPARED path=$path base=$default mode=early"
+  fi
   [ -z "$notice" ] || echo "$notice"
   [ -z "$moved_msg" ] || echo "$moved_msg"
   echo "Worktree prepared at $(display_path "$path") (detached at the '$default' tip)."
-  echo "Run the rest of /speckit-specify there; git.feature creates '$branch' inside the worktree."
+  if [ -n "$branch" ]; then
+    echo "Run the rest of /speckit-specify there; git.feature creates '$branch' inside the worktree."
+  else
+    echo "The directory name is provisional: run the rest of /speckit-specify there, and after git.feature has created the feature branch inside the worktree, finalize renames the directory after the branch."
+  fi
   echo "cd $path"
 }
 
@@ -771,11 +798,70 @@ prepared_worktree_unused() {
   [ -z "$(printf '%s\n' "$current" | grep -vxF -f "$manifest")" ]
 }
 
+# branch_belongs_to_pending <branch> <worktree> <short-name>: true when
+# <branch>, checked out in the main checkout, is clearly the branch that
+# git.feature created for the prepared worktree <worktree>, whose branch name
+# was not known at prepare time. All of these must hold:
+# - the branch name ends with `-<short-name>`;
+# - its reflog says it was created after the worktree was prepared (a branch
+#   without a reflog does not qualify);
+# - every commit on it beyond the worktree's (detached) commit touches only
+#   files under specs/ (the optional after_specify commit of the spec).
+branch_belongs_to_pending() {
+  local branch="$1" wt="$2" short="$3" gd created prepared_at base files
+  [ -n "$short" ] || return 1
+  case "$branch" in
+    *-"$short") ;;
+    *) return 1 ;;
+  esac
+  gd=$(worktree_git_dir "$wt") || return 1
+  prepared_at=$(file_mtime "$gd/$MARKER_PREPARED") || return 1
+  created=$(branch_created_at "$branch")
+  [ -n "$created" ] && [ -n "$prepared_at" ] || return 1
+  # One second of slack for file systems with coarse timestamps.
+  [ "$created" -ge $((prepared_at - 1)) ] || return 1
+  base=$(git -C "$wt" rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null) || return 1
+  git merge-base --is-ancestor "$base" "refs/heads/$branch" 2>/dev/null || return 1
+  files=$(git diff --name-only "$base" "refs/heads/$branch" -- 2>/dev/null) || return 1
+  [ -z "$(printf '%s\n' "$files" | grep -v -e '^specs/' -e '^$' || true)" ]
+}
+
+# find_own_prepared <branch> <prepared-list>: path of the prepared worktree
+# this branch belongs to. An exact branch in the marker must match exactly.
+# A marker without a branch matches through branch_belongs_to_pending, and
+# only when exactly one such worktree qualifies (two runs with the same short
+# name are ambiguous, so neither is taken).
+find_own_prepared() {
+  local branch="$1" prepared="$2" line rest path mbranch mshort exact="" pending="" count=0
+  # Split by hand: `read` with IFS=$'\t' would merge an empty branch field.
+  while IFS= read -r line; do
+    [ -n "$line" ] || continue
+    path="${line%%$'\t'*}"
+    rest="${line#*$'\t'}"
+    mbranch="${rest%%$'\t'*}"
+    mshort="${rest#*$'\t'}"
+    if [ -n "$mbranch" ]; then
+      if [ "$mbranch" = "$branch" ] && [ -z "$exact" ]; then
+        exact="$path"
+      fi
+    elif branch_belongs_to_pending "$branch" "$path" "$mshort"; then
+      pending="$path"
+      count=$((count + 1))
+    fi
+  done <<< "$prepared"
+  if [ -n "$exact" ]; then
+    printf '%s\n' "$exact"
+  elif [ "$count" = 1 ]; then
+    printf '%s\n' "$pending"
+  fi
+  return 0
+}
+
 # finalize run in the main checkout while it is on feature branch <branch>.
 finalize_from_main() {
   local root="$1" branch="$2" prepared own_path
   prepared=$(list_prepared_worktrees)
-  own_path=$(printf '%s\n' "$prepared" | awk -F'\t' -v b="$branch" '$2 == b { print $1; exit }')
+  own_path=$(find_own_prepared "$branch" "$prepared")
 
   if [ -n "$own_path" ]; then
     # prepare created a worktree for exactly this branch, but git.feature
@@ -856,9 +942,12 @@ cmd_finalize() {
   created_by_prepare "$root" && ours=yes
   if [ -z "$branch" ]; then
     if [ -n "$ours" ]; then
-      echo "ERROR: this worktree was prepared for /speckit-specify, but no feature branch was created in it (speckit.git.feature did not run here, or failed)" >&2
-      echo "Run speckit.git.feature inside $root, or remove the worktree (git worktree remove --force $root) and run /speckit-specify again." >&2
-      exit 1
+      # Nothing to finalize yet. SKIPPED, like every other no-op result, so
+      # the exit code is 0; nothing was changed and there is no cd line.
+      echo "WORKTREE_SKIPPED reason=branch-not-created"
+      echo "WARNING: this worktree was prepared for /speckit-specify, but no feature branch was created in it (speckit.git.feature did not run here, or failed). Nothing was changed."
+      echo "Run speckit.git.feature inside $root with the same short name, then run finalize again there. Or give up on this run: hand any $STATE_REL back to the main checkout, then remove the worktree (git worktree remove --force $root)."
+      return 0
     fi
     echo "WORKTREE_SKIPPED reason=not-on-a-feature-branch"
     return 0
@@ -870,23 +959,26 @@ cmd_finalize() {
     return 0
   fi
 
-  # Keep the directory name in line with the branch (the agent may have
-  # chosen a different short name for git.feature than for prepare). Only
-  # worktrees created by prepare are moved; a worktree made by the user or
-  # the harness stays where it is.
-  local expected="$root" path="$root" moved=""
+  # Name the directory after the branch: a provisional `.pending-*` directory
+  # from early mode, or a directory whose name differs from the branch (an
+  # exact --branch that git.feature did not use). Only worktrees created by
+  # prepare are moved; a worktree made by the user or the harness stays where
+  # it is. An existing target path is never touched: the worktree keeps its
+  # current directory and finalize can run again once the path is free.
+  local expected="$root" path="$root" moved="" main
   if [ -n "$ours" ]; then
     expected=$(compute_worktree_path "$branch") || exit 1
   fi
   if [ "$expected" != "$root" ]; then
-    if [ -e "$expected" ]; then
-      echo "WARNING: cannot move the worktree to $expected (path exists); keeping $root" >&2
+    if [ -e "$expected" ] || [ -L "$expected" ]; then
+      echo "WARNING: cannot move the worktree to $expected (path exists); keeping $root. Nothing at $expected was changed. Move or remove it, then run finalize again to rename the worktree." >&2
     else
+      main=$(main_root) || main=""
       mkdir -p "$(dirname "$expected")"
-      if git -C "$(main_root)" worktree move "$root" "$expected" >&2; then
+      if [ -n "$main" ] && git -C "$main" worktree move "$root" "$expected" >&2; then
         path="$expected"
         moved="yes"
-        cd "$path"
+        cd "$path" || die "cannot change into $path"
       else
         echo "WARNING: git worktree move to $expected failed; keeping $root" >&2
       fi
@@ -932,7 +1024,15 @@ cmd_finalize() {
   fi
 
   echo "WORKTREE_FINALIZED path=$path branch=$branch"
-  [ -z "$moved" ] || echo "Worktree moved from $(display_path "$root") to $(display_path "$path") to match the branch."
+  if [ -n "$moved" ]; then
+    if is_pending_path "$root"; then
+      echo "Worktree renamed from the provisional $(display_path "$root") to $(display_path "$path") after its branch."
+    else
+      echo "Worktree moved from $(display_path "$root") to $(display_path "$path") to match the branch."
+    fi
+  elif is_pending_path "$path"; then
+    echo "WARNING: the worktree still has its provisional name $(display_path "$path"); run finalize again once $(display_path "$expected") is free."
+  fi
   echo "Spec directory: $spec_dir"
   echo "cd $path"
 }
