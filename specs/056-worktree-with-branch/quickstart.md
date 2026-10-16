@@ -9,11 +9,11 @@ make test-statusline    # main-checkout session shows no feature state
 make sync-scripts-check # extension copies match spex/scripts/
 ```
 
-`tests/test_worktree.sh` builds a temporary repository with a `main` branch, a fake `.specify/` (registry with `spex-worktrees` enabled, a stub `create-new-feature.sh` that supports `--dry-run --json`) and a `.claude/` directory. It covers these cases:
+`tests/test_worktree.sh` builds a temporary repository with a `main` branch, a fake `.specify/` (registry with `spex-worktrees` enabled, git extension config but no git extension scripts, since `prepare` never runs them) and a `.claude/` directory. `git.feature` is simulated with `git checkout -b 057-<short-name>` inside the worktree. It covers these cases (among others):
 
 | Case | Expected |
 |------|----------|
-| `prepare` from clean `main` | `mode=early`. Main HEAD, `git reflog -1 HEAD` and `git status --porcelain` are unchanged. Worktree is detached at `main`'s tip and has `.specify/` and `.claude/` |
+| `prepare` from clean `main` | `mode=early`, provisional path `.claude/worktrees/.pending-x-<6 hex>`, no `branch=` field. Main HEAD, `git reflog -1 HEAD` and `git status --porcelain` are unchanged. Worktree is detached at `main`'s tip and has `.specify/` and `.claude/` |
 | `prepare` with uncommitted changes in main | Same as above. The changes are still uncommitted in main and absent from the worktree |
 | `prepare` while main is on `other` | `NOTICE` line. Worktree is based on `main`'s tip, and main stays on `other` |
 | `prepare` after a simulated `git.feature` (`git checkout -b 057-x` in main) | `mode=late`. Main is back on `main`, and the worktree is on `057-x` |
@@ -25,9 +25,11 @@ make sync-scripts-check # extension copies match spex/scripts/
 | late mode while main was on `other` | Main back on `other`, branch reset to `main`'s tip, worktree attached |
 | late-mode failure (target path present) | Exit 1, main on previous ref, commit-less branch deleted |
 | `--branch` naming an existing branch | Exit 1, no worktree |
-| external `base_path` | Worktree at `<base>/<repo>@<branch>` |
+| external `base_path` | Worktree at `<base>/<repo>@.pending-x-<6 hex>`, renamed to `<base>/<repo>@<branch>` by `finalize` |
+| `finalize` after `git.feature` in a provisional worktree | Directory renamed after the branch, new `cd` line; an existing target path is left untouched |
+| `finalize` in a prepared worktree that is still detached | `WORKTREE_SKIPPED reason=branch-not-created`, nothing changed |
 | late mode with flow `create` state for the branch | State moved into the worktree |
-| `prepare` with target path already present | Exit 1. No worktree and no branch added, main unchanged |
+| `prepare --branch 057-x` with target path already present | Exit 1. No worktree and no branch added, main unchanged |
 | `prepare` with no resolvable default branch | Exit 1 with the `set-head` hint |
 | flow state `running=specify` in main | Moved into the worktree, and main has no `.spex-state` |
 | ship state `stage=plan` in main | Not moved |

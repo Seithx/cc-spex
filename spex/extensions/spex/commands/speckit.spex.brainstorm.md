@@ -181,8 +181,8 @@ If `WORKTREES_ENABLED` is `true`:
    .specify/extensions/spex-worktrees/scripts/spex-worktree.sh prepare --short-name '<short-name>'
    ```
 3. On exit code 1 or 2, show the `ERROR:` lines and **stop**. Do not fall back to running `/speckit-specify` in the main checkout.
-4. Otherwise run `cd '<path>'` with the path from the last output line (`cd <abs-path>`), and show any `NOTICE:` line.
-5. Invoke `/speckit-specify` from inside the worktree, passing the brainstorm content (read it before the `cd`; an uncommitted brainstorm file does not exist in the worktree) and telling it to reuse the same short name and to run `speckit.git.feature` with `GIT_BRANCH_NAME` set to the `branch=` value of the `WORKTREE_PREPARED` line. Its `before_specify` worktree hook finds the prepared worktree and continues without a warning. If `/speckit-specify` then fails before the feature branch exists, roll back as described in `speckit.spex-worktrees.manage`, Action: Prepare, Step 4 (hand the flow state back to the main checkout, then remove the prepared worktree).
+4. Otherwise run `cd '<path>'` with the path from the last output line (`cd <abs-path>`), and show any `NOTICE:` line. The directory name is provisional (`.pending-<short-name>-<random>`): the branch does not exist yet, and the `after_specify` finalize hook renames the directory after it.
+5. Invoke `/speckit-specify` from inside the worktree, passing the brainstorm content (read it before the `cd`; an uncommitted brainstorm file does not exist in the worktree) and telling it to pass the same short name to `speckit.git.feature`, so the branch gets a matching name. Do not set `GIT_BRANCH_NAME`. Its `before_specify` worktree hook finds the prepared worktree and continues without a warning. When its finalize hook prints a new `cd` line, the session follows it into the renamed directory. If `/speckit-specify` then fails before the feature branch exists, roll back as described in `speckit.spex-worktrees.manage`, Action: Prepare, Step 4 (hand the flow state back to the main checkout, then remove the prepared worktree).
 
 The brainstorm file itself stays in the main checkout. It is not copied or committed into the worktree.
 
@@ -732,4 +732,4 @@ User: A
 [Invokes /speckit-spex-ship brainstorm/NN-comments.md --ask smart]
 ```
 
-Had the user picked A (Specify step-by-step) with `spex-worktrees` enabled, the handoff would first run `spex-worktree.sh prepare --short-name 'comments'` from the main checkout, `cd` into the printed worktree path, and only then invoke `/speckit-specify` there with the brainstorm content and the same short name.
+Had the user picked A (Specify step-by-step) with `spex-worktrees` enabled, the handoff would first run `spex-worktree.sh prepare --short-name 'comments'` from the main checkout, `cd` into the printed (provisional) worktree path, and only then invoke `/speckit-specify` there with the brainstorm content and the same short name. Its finalize hook would then rename the directory to the branch name, for example `.claude/worktrees/058-comments`.

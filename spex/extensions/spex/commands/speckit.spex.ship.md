@@ -260,7 +260,7 @@ RECOVERY_DIR=$("$WORKTREE_CWD")
 [ -n "$RECOVERY_DIR" ] && cd "$RECOVERY_DIR"
 ```
 
-The script uses `SHIP_STATE_FILE` to find the worktree root. With `spex-worktrees` enabled, Stage 0 re-exports `SHIP_STATE_FILE` to the worktree's `.specify/.spex-state` right after `prepare` (and again after `finalize`, which may move the worktree directory), so from then on recovery always returns to the worktree, never to the main checkout. It is safe to call unconditionally; it outputs nothing when CWD is already correct or when not in a worktree.
+The script uses `SHIP_STATE_FILE` to find the worktree root. With `spex-worktrees` enabled, Stage 0 re-exports `SHIP_STATE_FILE` to the worktree's `.specify/.spex-state` right after `prepare` (and again after `finalize`, which renames the provisional worktree directory after the branch), so from then on recovery always returns to the worktree, never to the main checkout. It is safe to call unconditionally; it outputs nothing when CWD is already correct or when not in a worktree.
 
 ## Ship Pipeline Guard
 
@@ -501,14 +501,14 @@ Extension overlays (e.g., `spex-gates` adding review after specify) may run thei
      ```bash
      export SHIP_STATE_FILE="$(pwd -P)/.specify/.spex-state"
      ```
-     Show any `NOTICE:` line in the log. From now on the pipeline runs entirely inside the worktree.
+     Show any `NOTICE:` line in the log. From now on the pipeline runs entirely inside the worktree. The directory has a provisional name (`.pending-<short-name>-<random>`) and the status line has no `branch=` field: `prepare` does not know the branch name. `finalize` (step 4) renames the directory after the branch that `speckit.git.feature` creates inside it.
    - On `WORKTREE_SKIPPED`: continue in the current directory.
 
    If worktrees are NOT enabled, skip this step (existing behavior).
 3. Invoke `/speckit-specify` passing the brainstorm content as the feature description.
    - The brainstorm content provides the problem statement, approaches considered, and decisions made.
    - Pass it as the user input to the specify command.
-   - When a worktree was prepared in step 2, tell specify to reuse the **same short name** and to run `speckit.git.feature` with `GIT_BRANCH_NAME` set to the `branch=` value of the `WORKTREE_PREPARED` line, so the branch matches the worktree directory exactly. Its `before_specify` worktree hook finds the prepared worktree and returns `WORKTREE_READY` without changing anything.
+   - When a worktree was prepared in step 2, tell specify to pass the **same short name** to `speckit.git.feature`, so the branch gets a matching name. Do not set `GIT_BRANCH_NAME`: the branch name comes from the `git` extension alone. Its `before_specify` worktree hook finds the prepared worktree and returns `WORKTREE_READY` without changing anything.
    - If `/speckit-specify` fails before the feature branch exists (for example `speckit.git.feature` reports that the branch is taken), roll back as described in `speckit.spex-worktrees.manage`, Action: Prepare, Step 4: copy the ship state back to the main checkout, re-export `SHIP_STATE_FILE` there, remove the prepared worktree, then pause the pipeline as a blocker. Never retry specify in the main checkout.
    - **Do not pause** after specify completes, even if an extension overlay runs a review or asks for confirmation. Proceed directly to step 4.
    - **CRITICAL: Specify triggers `after_specify` hooks (including the worktree `finalize` hook).** When the last hook returns (you may see a `WORKTREE_FINALIZED` line), you are back in the ship pipeline. Do NOT stop. Immediately proceed to step 4.
@@ -517,11 +517,12 @@ Extension overlays (e.g., `spex-gates` adding review after specify) may run thei
    .specify/extensions/spex-worktrees/scripts/spex-worktree.sh finalize
    ```
    Act on the status line:
-   - `WORKTREE_FINALIZED` or `WORKTREE_ADOPTED`: run `cd '<path>'` with the path from the last output line (a `cd ` line), then re-export the state file path, because finalize may move the worktree directory when the branch name differs from it:
+   - `WORKTREE_FINALIZED` or `WORKTREE_ADOPTED`: run `cd '<path>'` with the path from the last output line (a `cd ` line), then re-export the state file path. This is required: finalize renames the provisional `.pending-*` directory after the branch (the `finalize` hook inside specify may already have done so), so the old path and the old `SHIP_STATE_FILE` no longer exist:
      ```bash
      export SHIP_STATE_FILE="$(pwd -P)/.specify/.spex-state"
      ```
    - `WORKTREE_SKIPPED reason=prepared-worktree-exists`: the session was reset to the main checkout. `cd` into this feature's worktree (listed in the output, or found with `git worktree list` via the branch in the ship state), run finalize there, and continue with the result.
+   - `WORKTREE_SKIPPED reason=branch-not-created`: `speckit.git.feature` did not create the branch inside the worktree. Nothing was changed. Pause the pipeline as a blocker and show the `WARNING:` lines; never create the branch by hand in the main checkout.
    - Any other `WORKTREE_SKIPPED`: there is no `cd` line; stay where you are.
    - Exit code 1: pause the pipeline as a blocker.
 

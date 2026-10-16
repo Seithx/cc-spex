@@ -12,13 +12,13 @@ This command manages git worktrees to isolate feature development. The worktree 
 
 It supports these actions:
 
-- **prepare**: Called by the `before_specify` hook (priority 1). Creates a worktree at the default branch's tip and moves the session into it. The `git` extension's branch hook then creates the feature branch inside the worktree.
-- **finalize**: Called by the `after_specify` hook. Confirms the worktree, branch, `feature.json` and flow state, and keeps the session in the worktree. Falls back to **adopt** when prepare did not run.
+- **prepare**: Called by the `before_specify` hook (priority 1). Creates a worktree at the default branch's tip under a provisional name (`.pending-<short-name>-<random>`) and moves the session into it. The `git` extension's branch hook then creates the feature branch inside the worktree.
+- **finalize**: Called by the `after_specify` hook. Renames the provisional worktree directory after the branch, confirms `feature.json` and flow state, and keeps the session in the worktree. Falls back to **adopt** when prepare did not run.
 - **adopt** (alias: **create**): Legacy path. Moves a feature branch that is checked out in the main checkout into a new worktree.
 - **ensure**: Called by the `before_implement` hook. Verifies worktree isolation exists. If already in a worktree, proceeds silently. If not, offers **adopt**.
-- **list**: Shows all active feature worktrees with path, branch, and feature name.
+- **list**: Shows all active feature worktrees with path, branch, and feature name, plus pending (provisional) worktrees.
 - **finish**: Merges the current worktree's branch into the default branch and removes the worktree. Use when implementation is complete.
-- **cleanup**: Detects worktrees whose branches are merged and offers removal.
+- **cleanup**: Detects worktrees whose branches are merged, and pending worktrees left behind by an interrupted specify, and offers removal.
 
 The **prepare**, **finalize** and **adopt** actions delegate to a script. Do not re-implement its steps inline:
 
@@ -73,11 +73,12 @@ If `/speckit-specify` was invoked by ship or the brainstorm handoff with a short
 
 Pass the short name in single quotes, and never splice free text (titles, descriptions) into the command: double quotes would let backticks or `$(...)` in that text run as commands. If the user gave an exact branch name (`GIT_BRANCH_NAME`), add `--branch '<name>'`.
 
-The branch name comes from the `git` extension's branch script with `--dry-run` (`create-new-feature-branch.sh` in newer spec-kit releases, `create-new-feature.sh` in older ones), so numbering rules (sequential or timestamp, `GIT_BRANCH_NAME` override) are the same as today. Nothing is created in the main checkout.
+`prepare` does not know or compute the branch name: numbering (sequential or timestamp) stays entirely with the `git` extension's `speckit.git.feature` hook, which creates the branch inside the worktree. Without `--branch`, the worktree therefore starts under a provisional directory name, `.pending-<short-name>-<6 hex>` under the base path (`<repo>@.pending-<short-name>-<6 hex>` for an external base path), and **finalize** renames it after the branch. With `--branch`, the directory is named after that branch right away. Nothing is created in the main checkout.
 
 ### Step 3: Act on the result
 
-- **`WORKTREE_PREPARED ... mode=early`**: run `cd '<path>'` with the path from the last output line. From now on, every remaining hook (`speckit.git.feature`, the spex flow-state hook) and every spec write of this `/speckit-specify` run happens inside the worktree. Run `speckit.git.feature` with `GIT_BRANCH_NAME` set to the `branch=` value of the status line, so the branch matches the worktree directory exactly (this matters most for timestamp numbering). Show any `NOTICE:` line to the user (for example, the main checkout is not on the default branch, and the new branch starts from the default branch anyway).
+- **`WORKTREE_PREPARED path=<abs> base=<default> mode=early`** (no `branch=` field): run `cd '<path>'` with the path from the last output line. From now on, every remaining hook (`speckit.git.feature`, the spex flow-state hook) and every spec write of this `/speckit-specify` run happens inside the worktree. Run `speckit.git.feature` there with the short name from Step 1; do not set `GIT_BRANCH_NAME` for it. The directory name is provisional until **finalize** renames it, so do not tell the user the path is final. Show any `NOTICE:` line to the user (for example, the main checkout is not on the default branch, and the new branch starts from the default branch anyway).
+- **`WORKTREE_PREPARED path=<abs> branch=<name> base=<default> mode=early`**: the user gave an exact branch name. Same as above, but run `speckit.git.feature` with `GIT_BRANCH_NAME` set to that exact name (the one the user gave), so the branch matches the directory.
 - **`WORKTREE_PREPARED ... mode=late`**: `speckit.git.feature` already ran in the main checkout (hooks were dispatched in file order). The script restored the main checkout to its previous ref and attached the branch to the new worktree. Run `cd '<path>'`, show the `NOTICE: hook order ...` line, and continue `/speckit-specify` in the worktree. Do not run `speckit.git.feature` again.
 - **`WORKTREE_READY`**: the session is already inside a worktree. Run `cd '<path>'` (usually a no-op) and continue. Show a `WARNING:` line if one was printed (nesting is not supported, the spec is written in the current worktree).
 - **`WORKTREE_SKIPPED`**: the extension is disabled. Continue without a worktree.
@@ -85,26 +86,29 @@ The branch name comes from the `git` extension's branch script with `--dry-run` 
 
 ### Step 4: If `speckit.git.feature` fails inside the prepared worktree
 
-If the branch hook fails after an early-mode prepare (for example, the branch name is taken), remove the worktree, and the branch too if the hook created it before failing and it has no commits of its own. The same applies when ship or the brainstorm handoff prepared the worktree and `/speckit-specify` then fails before the branch exists. First hand the flow or ship state back to the main checkout, because `prepare` moved it into the worktree and removing the worktree would delete the only copy. Then stop:
+If the branch hook fails after an early-mode prepare (for example, the branch name is taken), remove the worktree, and the branch too if the hook created and checked it out inside the worktree before failing and it has no commits of its own. The same applies when ship or the brainstorm handoff prepared the worktree and `/speckit-specify` then fails before the branch exists. First hand the flow or ship state back to the main checkout, because `prepare` moved it into the worktree and removing the worktree would delete the only copy. Then stop:
 
 ```bash
 MAIN_WORKTREE=$(git worktree list --porcelain | head -1 | sed 's/^worktree //')
+[ -n "$MAIN_WORKTREE" ] || { echo "ERROR: cannot locate the main checkout"; exit 1; }
+# The branch the hook created inside the worktree, if any (empty while detached).
+CREATED_BRANCH=$(git -C '<path>' branch --show-current 2>/dev/null || true)
 if [ -f '<path>/.specify/.spex-state' ] && [ ! -f "$MAIN_WORKTREE/.specify/.spex-state" ]; then
   cp -p '<path>/.specify/.spex-state' "$MAIN_WORKTREE/.specify/.spex-state"
 fi
-cd "$MAIN_WORKTREE"
+cd "$MAIN_WORKTREE" || exit 1
 # In a ship pipeline, point the state file back at the main checkout before pausing.
 [ -n "${SHIP_STATE_FILE:-}" ] && export SHIP_STATE_FILE="$MAIN_WORKTREE/.specify/.spex-state"
 git worktree remove --force '<path>'
-# Only a branch this run created: it exists, and has no commits beyond <base>
-# (the base= value from the WORKTREE_PREPARED line).
-if git show-ref --verify --quiet "refs/heads/<branch>" &&
-   [ "$(git rev-list --count "<base>..<branch>")" = "0" ]; then
-  git branch -D "<branch>"
+# Only a branch this run created inside the worktree, without commits beyond
+# <base> (the base= value from the WORKTREE_PREPARED line).
+if [ -n "$CREATED_BRANCH" ] && git show-ref --verify --quiet "refs/heads/$CREATED_BRANCH" &&
+   [ "$(git rev-list --count "<base>..$CREATED_BRANCH")" = "0" ]; then
+  git branch -D "$CREATED_BRANCH"
 fi
 ```
 
-Skip the branch deletion when the hook failed because `<branch>` already existed before this run (the "already exists" error): that branch belongs to someone else. Then report the error and stop `/speckit-specify`. Never retry `speckit.git.feature` in the main checkout.
+`CREATED_BRANCH` is empty when the hook failed before checking out a branch in the worktree (for example the "already exists" error), so a branch that existed before this run is never deleted. Then report the error and stop `/speckit-specify`. Never retry `speckit.git.feature` in the main checkout.
 
 ## Action: Finalize
 
@@ -116,15 +120,16 @@ Runs as the `after_specify` hook, inside the worktree prepared above.
 "$WORKTREE_SCRIPT" finalize
 ```
 
-It confirms the branch, moves the worktree directory if the branch name differs from it (the agent chose a different short name for `speckit.git.feature`), writes `.specify/feature.json` only if it points elsewhere, and sets `feature_branch` and `spec_dir` in `.specify/.spex-state`. It never creates, switches or commits anything when the worktree already exists.
+It confirms the branch, renames the provisional `.pending-*` directory after the branch (or moves a directory whose name differs from the branch), writes `.specify/feature.json` only if it points elsewhere, and sets `feature_branch` and `spec_dir` in `.specify/.spex-state`. It never creates, switches or commits anything when the worktree already exists. If the target directory already exists, nothing there is touched: the worktree keeps its current directory, a `WARNING:` says so, and running finalize again once the path is free completes the rename.
 
 ### Step 2: Act on the result
 
-- **`WORKTREE_FINALIZED`**: run `cd '<path>'` with the path from the last output line (the path changes when the directory was moved; only worktrees that `prepare` created are ever moved). The session stays in the worktree.
+- **`WORKTREE_FINALIZED`**: run `cd '<path>'` with the path from the last output line. After an early-mode prepare this is a new path, because the provisional directory was renamed (only worktrees that `prepare` created are ever moved). The old `.pending-*` path no longer exists, so never reuse it. The session stays in the worktree.
 - **`WORKTREE_ADOPTED`**: the feature branch was checked out in the main checkout, either because prepare did not run, or because `speckit.git.feature` ran in the main checkout after prepare (a `NOTICE:` line says so; the unused prepared worktree was removed). The script ran the legacy **adopt** path. Run `cd '<path>'`.
-- **`WORKTREE_SKIPPED reason=prepared-worktree-exists`**: finalize ran in the main checkout (for example after a working-directory reset) while a prepared, not yet finalized worktree exists. The main checkout was left alone. Follow the `WARNING:` lines: usually `cd` into this feature's worktree (listed in the output) and run finalize again there.
+- **`WORKTREE_SKIPPED reason=prepared-worktree-exists`**: finalize ran in the main checkout (for example after a working-directory reset) while a prepared, not yet finalized worktree exists that does not clearly belong to the branch checked out there. The main checkout was left alone. Follow the `WARNING:` lines: usually `cd` into this feature's worktree (listed in the output) and run finalize again there.
+- **`WORKTREE_SKIPPED reason=branch-not-created`** (exit code 0): finalize ran inside a prepared worktree that is still detached, because `speckit.git.feature` did not run there or failed. Nothing was changed and there is no `cd` line. Do not treat the spec as finished: either run `speckit.git.feature` inside the worktree with the same short name and then run finalize again, or roll back as described in Action: Prepare, Step 4. Inside a ship pipeline this is a blocker.
 - **`WORKTREE_SKIPPED`** (any other reason): nothing to do. There is no `cd` line.
-- **Exit code 1**: show the `ERROR:` lines and stop. In particular, finalize fails inside a prepared worktree that has no branch (`speckit.git.feature` did not run there or failed); do not continue writing the spec there.
+- **Exit code 1**: show the `ERROR:` lines and stop.
 
 ### Step 3: Completion message
 
@@ -236,7 +241,9 @@ Parse the output. Each worktree entry has:
 
 ### Step 2: Filter Feature Branches
 
-Only show worktrees whose branch matches the `NNN-*` feature branch pattern (three-digit prefix followed by a hyphen).
+Show worktrees whose branch matches the `NNN-*` feature branch pattern (three-digit prefix followed by a hyphen).
+
+Also show **pending** worktrees: a worktree whose directory name starts with `.pending-` (inside the project) or contains `@.pending-` (external base path). `prepare` created it, and the feature branch does not exist yet (HEAD is detached) or `finalize` has not renamed it yet. The short name sits between `.pending-` and the trailing 6-character random suffix.
 
 Skip the main worktree (the original repo).
 
@@ -247,13 +254,14 @@ Display a table with worktree directory names (`@` separator):
 ```
 Active Feature Worktrees:
 
-  Path                              Branch              Feature
-  ─────────────────────────────────────────────────────────────
-  .claude/worktrees/004-user-auth   004-user-auth       user-auth
-  .claude/worktrees/007-worktrees   007-worktrees-trait  worktrees-trait
+  Path                                     Branch              Feature
+  ─────────────────────────────────────────────────────────────────────
+  .claude/worktrees/004-user-auth          004-user-auth       user-auth
+  .claude/worktrees/007-worktrees          007-worktrees-trait  worktrees-trait
+  .claude/worktrees/.pending-login-3fa91c  (pending)           login
 ```
 
-For inside-project worktrees, show the relative path (`.claude/worktrees/<branch>`). For external worktrees, show the last path component (`repo@branch`).
+For inside-project worktrees, show the relative path (`.claude/worktrees/<branch>`). For external worktrees, show the last path component (`repo@branch`). For a pending worktree, show `(pending)` as the branch while HEAD is detached, or its branch otherwise (finalize has not renamed it yet). When pending worktrees are listed, add one line below the table: `Pending worktrees belong to a /speckit-specify run in progress or one that was interrupted; see cleanup.`
 
 If no feature worktrees exist:
 
@@ -397,7 +405,7 @@ If the user wants to push: `git push origin $DEFAULT_BRANCH`
 
 ## Action: Cleanup
 
-Detect worktrees whose branches are merged and offer removal.
+Detect worktrees whose branches are merged, and pending worktrees left behind by an interrupted `/speckit-specify`, and offer removal.
 
 ### Step 1: Get Merged Branches
 
@@ -453,6 +461,44 @@ Skipping. Use --force to remove unmerged worktrees (data may be lost).
 ```
 
 Only remove unmerged worktrees if the user explicitly confirms after seeing the warning.
+
+### Step 5: Handle Pending Worktrees
+
+A pending worktree (directory `.pending-*`, or `<repo>@.pending-*` for an external base path) whose HEAD is still detached was prepared for a `/speckit-specify` run that never got its branch: the run was interrupted, or it is still running in another session right now. Only offer worktrees that carry the prepared marker, so worktrees made by hand are never touched:
+
+```bash
+MAIN_WORKTREE=$(git worktree list --porcelain | head -1 | sed 's/^worktree //')
+git worktree list --porcelain | sed -n 's/^worktree //p' | tail -n +2 | while IFS= read -r wt; do
+  case "$(basename "$wt")" in .pending-*|*@.pending-*) ;; *) continue ;; esac
+  [ -z "$(git -C "$wt" branch --show-current 2>/dev/null)" ] || continue
+  gd=$(git -C "$wt" rev-parse --absolute-git-dir 2>/dev/null) || continue
+  [ -f "$gd/spex-prepared" ] || continue
+  echo "PENDING $wt (prepared $(date -r "$gd/spex-prepared" '+%Y-%m-%d %H:%M' 2>/dev/null || stat -c %y "$gd/spex-prepared" 2>/dev/null))"
+  git -C "$wt" status --porcelain --untracked-files=normal -- specs 2>/dev/null | sed 's/^/    spec content: /'
+  [ -f "$wt/.specify/.spex-state" ] && echo "    holds a flow/ship state: $(jq -c '{mode, stage, running, status}' "$wt/.specify/.spex-state" 2>/dev/null)"
+done
+```
+
+Show every match to the user with its age and anything it holds (spec content, a flow or ship state), and ask for each one separately:
+
+```
+Pending worktree .claude/worktrees/.pending-login-3fa91c (prepared 2026-10-16 09:12) has no feature branch.
+It was left by an interrupted /speckit-specify, unless another session is specifying right now.
+Remove it? (yes/no)
+```
+
+Recommend keeping a worktree prepared within the last few minutes, or one whose state says a pipeline is `running`: another session may be using it. Remove only what the user confirmed, from the main checkout:
+
+```bash
+cd "$MAIN_WORKTREE" || exit 1
+# If it holds this run's state and the main checkout has none, hand it back first.
+if [ -f '<path>/.specify/.spex-state' ] && [ ! -f "$MAIN_WORKTREE/.specify/.spex-state" ]; then
+  cp -p '<path>/.specify/.spex-state' "$MAIN_WORKTREE/.specify/.spex-state"
+fi
+git worktree remove --force '<path>'
+```
+
+`--force` is needed because the worktree holds copied, untracked configuration. There is no branch to delete. A pending worktree that is already on a branch (finalize could not rename it because the target path existed) is not offered here: run finalize inside it once the target path is free.
 
 ---
 

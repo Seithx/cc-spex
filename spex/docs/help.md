@@ -109,8 +109,10 @@ spex EXTENSIONS (quality gates for spec-kit commands)
                                --external, --coderabbit, --copilot, --codex
 
   spex-worktrees extension:
-    /speckit-specify  → creates the worktree at .claude/worktrees/<branch>
-                        FIRST, then the branch and spec inside it; the main
+    /speckit-specify  → creates the worktree FIRST (provisional name
+                        .claude/worktrees/.pending-<short-name>-<random>),
+                        then the branch and spec inside it; finalize renames
+                        it to .claude/worktrees/<branch>. The main
                         checkout never switches branches. The session stays
                         in the worktree (also done by ship and the brainstorm
                         handoff). Needs the git extension. After upgrading,

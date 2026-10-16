@@ -157,7 +157,7 @@ A developer runs `/spex:init` with `spex-worktrees` enabled but the spec-kit `gi
 
 ## Assumptions
 
-- The spec-kit `git` extension's branch script can compute the next branch name without creating the branch (it supports a dry-run mode), so naming rules can be reused without changing upstream files.
+- The spec-kit `git` extension's branch script can compute the next branch name without creating the branch (it supports a dry-run mode), so naming rules can be reused without changing upstream files. *(Superseded 2026-10-16: spex no longer calls that script; the worktree starts under a provisional name and is renamed after the branch. See research.md R2.)*
 - Per Constitution III, `spex-worktrees` MUST NOT disable, edit or reorder the `git` extension's hooks. The `git` extension's `before_specify` branch hook keeps running unchanged. The combined step therefore has to work with that hook (for example, by preparing the worktree first so that the unchanged hook creates the branch inside the worktree rather than in the main checkout). The plan chooses the mechanism. FR-002 and FR-015 are fixed constraints.
 - The agent session can move its working directory into an in-project worktree (`.claude/worktrees/`) during a run, as ship already does today.
 - Harness-neutral worktree lifecycle and a `.worktrees/` default location are out of scope; they are tracked in [#30](https://github.com/rhuss/cc-spex/issues/30).

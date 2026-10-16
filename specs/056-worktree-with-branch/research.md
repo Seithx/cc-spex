@@ -35,6 +35,8 @@
 
 **Alternatives considered**: A provisional path (`.claude/worktrees/.pending-<ts>`) renamed after the branch exists. Rejected because the worktree would carry a meaningless name for the whole specify run and a crashed session would leave an unnamed, detached worktree that `list` does not show.
 
+**Superseded (2026-10-16)**: The dry-run decision was reversed. The dry run executed an internal script of the `git` extension (`create-new-feature.sh`), which upstream then renamed to `create-new-feature-branch.sh`, breaking `prepare` until spex learned both names. Depending on another extension's private script for a value that only names a directory is a recurring break risk, and it also duplicated part of the numbering decision. `prepare` now uses the provisional path after all, with the two objections addressed: the name carries the short name (`.pending-<short-name>-<6 hex>`, so it is recognizable during the run), and `list` shows and `cleanup` offers pending worktrees that an interrupted run left behind. `finalize` renames the directory after the branch that `git.feature` created, so the rename that used to be the rare mismatch path is now the normal path. With `--branch` or `GIT_BRANCH_NAME` the directory is still named after the branch at once. The main-checkout repair, which matched the prepared worktree by its planned branch name, now matches by short-name suffix plus creation time and spec-only commits (see the contract).
+
 ## R3: Base commit for the new branch
 
 **Decision**: `git worktree add --detach <path> <default-branch>`. The default branch is resolved as spex does today: `origin/HEAD`, then a local `main`, then `master`. If none resolves, stop with a hint (`git remote set-head origin --auto`).
