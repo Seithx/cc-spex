@@ -1032,6 +1032,33 @@ FEATURE_ONLY=$(git -C "$REPO" rev-list main..057-x | wc -l | tr -d ' ')
 assert_eq "no commit reachable from the feature branch only" "0" "$FEATURE_ONLY"
 assert_eq "main checkout never left main" "main" "$(sort -u "$TMPROOT/heads.txt" | tr '\n' ' ' | sed 's/ $//')"
 
+# ===========================================================================
+
+GITEXT_BASH=".specify/extensions/git/scripts/bash"
+
+echo "Test: prepare finds the renamed branch script (create-new-feature-branch.sh)"
+make_repo
+mv "$REPO/$GITEXT_BASH/create-new-feature.sh" "$REPO/$GITEXT_BASH/create-new-feature-branch.sh"
+run_wt "$REPO" prepare --short-name renamed --description "Renamed script"
+assert_eq "exit code" "0" "$RC"
+assert_eq "branch from renamed script" "057-renamed" "$(status_field branch)"
+
+echo "Test: prepare prefers create-new-feature-branch.sh when both names exist"
+make_repo
+sed 's/PREFIX="057"/PREFIX="058"/' "$REPO/$GITEXT_BASH/create-new-feature.sh" > "$REPO/$GITEXT_BASH/create-new-feature-branch.sh"
+chmod +x "$REPO/$GITEXT_BASH/create-new-feature-branch.sh"
+run_wt "$REPO" prepare --short-name both --description "Both scripts"
+assert_eq "exit code" "0" "$RC"
+assert_eq "branch from the new name" "058-both" "$(status_field branch)"
+
+echo "Test: prepare fails cleanly when no branch script exists"
+make_repo
+rm -f "$REPO/$GITEXT_BASH/create-new-feature.sh"
+run_wt "$REPO" prepare --short-name none --description "No script"
+assert_eq "exit code" "1" "$RC"
+assert_contains "error names both script names" "create-new-feature-branch.sh create-new-feature.sh" "$OUT"
+assert_eq "no worktree created" "1" "$(wt_count)"
+
 echo ""
 echo "Results: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

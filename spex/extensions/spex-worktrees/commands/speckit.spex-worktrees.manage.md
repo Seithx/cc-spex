@@ -73,7 +73,7 @@ If `/speckit-specify` was invoked by ship or the brainstorm handoff with a short
 
 Pass the short name in single quotes, and never splice free text (titles, descriptions) into the command: double quotes would let backticks or `$(...)` in that text run as commands. If the user gave an exact branch name (`GIT_BRANCH_NAME`), add `--branch '<name>'`.
 
-The branch name comes from the `git` extension's `create-new-feature.sh --dry-run`, so numbering rules (sequential or timestamp, `GIT_BRANCH_NAME` override) are the same as today. Nothing is created in the main checkout.
+The branch name comes from the `git` extension's branch script with `--dry-run` (`create-new-feature-branch.sh` in newer spec-kit releases, `create-new-feature.sh` in older ones), so numbering rules (sequential or timestamp, `GIT_BRANCH_NAME` override) are the same as today. Nothing is created in the main checkout.
 
 ### Step 3: Act on the result
 

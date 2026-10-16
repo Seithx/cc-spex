@@ -24,7 +24,11 @@ set -euo pipefail
 
 REGISTRY_REL=".specify/extensions/.registry"
 WORKTREE_CONFIG_REL=".specify/extensions/spex-worktrees/worktree-config.yml"
-GIT_FEATURE_SCRIPT_REL=".specify/extensions/git/scripts/bash/create-new-feature.sh"
+# The git extension's branch script. Newer spec-kit releases renamed it to
+# create-new-feature-branch.sh; older ones ship create-new-feature.sh. Both
+# take the same flags and print the same JSON. First match wins.
+GIT_FEATURE_SCRIPT_DIR_REL=".specify/extensions/git/scripts/bash"
+GIT_FEATURE_SCRIPT_NAMES=(create-new-feature-branch.sh create-new-feature.sh)
 STATE_REL=".specify/.spex-state"
 DEFAULT_BASE_PATH=".claude/worktrees"
 ADOPT_NOTE=""
@@ -204,6 +208,19 @@ in_linked_worktree() {
   git_dir=$(cd "$(git rev-parse --git-dir 2>/dev/null)" 2>/dev/null && pwd -P) || return 1
   common_dir=$(cd "$(git rev-parse --git-common-dir 2>/dev/null)" 2>/dev/null && pwd -P) || return 1
   [ "$git_dir" != "$common_dir" ]
+}
+
+# Print the path of the git extension's branch script under <root>, trying
+# each name in GIT_FEATURE_SCRIPT_NAMES. Returns 1 when none exists.
+find_git_feature_script() {
+  local root="$1" name
+  for name in "${GIT_FEATURE_SCRIPT_NAMES[@]}"; do
+    if [ -f "$root/$GIT_FEATURE_SCRIPT_DIR_REL/$name" ]; then
+      printf '%s\n' "$root/$GIT_FEATURE_SCRIPT_DIR_REL/$name"
+      return 0
+    fi
+  done
+  return 1
 }
 
 # True for sequential (NNN-) and timestamp (YYYYMMDD-HHMMSS-) feature branches.
@@ -623,9 +640,9 @@ cmd_prepare() {
   # 4. Early mode.
   if [ -z "$branch" ]; then
     [ -n "$short_name" ] || { echo "ERROR: --short-name or --branch is required" >&2; usage; exit 2; }
-    local feature_script="$root/$GIT_FEATURE_SCRIPT_REL" json err
-    if [ ! -f "$feature_script" ]; then
-      echo "ERROR: $GIT_FEATURE_SCRIPT_REL not found; spex-worktrees requires the spec-kit git extension" >&2
+    local feature_script json err
+    if ! feature_script=$(find_git_feature_script "$root"); then
+      echo "ERROR: no git extension branch script found in $GIT_FEATURE_SCRIPT_DIR_REL (looked for: ${GIT_FEATURE_SCRIPT_NAMES[*]}); spex-worktrees requires the spec-kit git extension" >&2
       echo "Fix: run 'specify extension add git' (or 'specify extension enable git'), or disable spex-worktrees." >&2
       exit 1
     fi
