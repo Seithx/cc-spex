@@ -64,14 +64,17 @@ def main():
     session_id = hook_input.get('session_id', 'unknown')
     cwd = Path(hook_input.get('cwd', '.'))
 
+    # Resolve plugin root from script location:
+    # scripts/hooks/context-hook.py -> scripts/hooks -> scripts -> plugin_root
+    plugin_root = Path(__file__).parent.parent.parent
+
+    # Any prompt answers a paused ship pipeline: mark it running again.
+    run_shared('resume-paused.sh', [str(cwd), str(plugin_root)])
+
     # For non-spex commands, clean up any stale marker and exit
     if not prompt.startswith('/spex:'):
         clear_marker(session_id)
         sys.exit(0)
-
-    # Resolve plugin root from script location:
-    # scripts/hooks/context-hook.py -> scripts/hooks -> scripts -> plugin_root
-    plugin_root = Path(__file__).parent.parent.parent
 
     # Delegate command validation to shared shell function
     shared_result = run_shared('context-hook.sh', [

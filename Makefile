@@ -25,6 +25,7 @@ test-generated-trees:
 
 test-ship-state:
 	@tests/test_ship_state.sh
+	@tests/test_resume_paused.sh
 
 test-statusline:
 	@tests/test_ship_statusline.sh

@@ -988,7 +988,7 @@ After the user responds:
    "$SHIP_STATE" resume                      # keep the current level
    "$SHIP_STATE" resume --ask "<ask-level>"  # user asked for a different level
    ```
-   Use the `ask` value from the `RESUMED` output for the rest of the run.
+   Use the `ask` value from the `RESUMED` output for the rest of the run. In Claude Code and Codex, the spex prompt hook already sets a paused pipeline back to `running` when the user replies, so the status line clears even if this step is missed. Run `resume` anyway: it is idempotent, and it is the only way to change the oversight level.
 2. Apply any fixes the user requested.
 3. If user said to skip findings, proceed to the next stage.
 4. If user provided fixes, apply them and optionally re-run the review.
