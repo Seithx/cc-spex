@@ -92,6 +92,15 @@ OUT=$(run_statusline "$WT1/src" "$MAIN")
 assert_contains "worktree stage shown" "plan" "$OUT"
 cleanup
 
+echo "Test: main session shows no progress for a pipeline moved into a worktree"
+setup
+# After spex-worktree.sh prepare, the ship state lives only in the worktree.
+ship_state clarify 1 > "$WT1/.specify/.spex-state"
+OUT=$(run_statusline "$MAIN" "$MAIN")
+assert_not_contains "no ship status in main session" "ship" "$OUT"
+assert_not_contains "worktree stage not shown in main session" "clarify" "$OUT"
+cleanup
+
 echo "Test: context percentage from delayed stdin JSON is rendered"
 setup
 ship_state plan 3 > "$WT1/.specify/.spex-state"

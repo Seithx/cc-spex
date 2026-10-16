@@ -65,6 +65,12 @@ Before ANY implementation work:
 5. **Handle spec/code drift.** Use speckit-spex-evolve when mismatches detected.
 6. **Close out features.** After review passes: `/clear`, then `/speckit-spex-finish` (verifies, runs the walkthrough gate, squashes, and merges or keeps the branch in one step; it stops before squash if verification fails).
 
+### Dispatching spec-kit hooks
+
+When a `/speckit-*` command lists the hooks of an event from `.specify/extensions.yml` (for example `before_specify`), dispatch them **sorted by `priority`, lowest first**. A hook without `priority` counts as `10`. Hooks with the same priority keep their file order. This is the order spec-kit's own `HookExecutor` uses.
+
+Do not run hooks in plain file order. The `spex-worktrees` `prepare` hook has priority `1` and must run before the `git` extension's branch hook (`speckit.git.feature`, priority `10`), which comes first in the file. Run in that order, the worktree exists before the branch is created, and the main checkout never switches branches. The spex flow-state hook (priority `2`) then writes its state inside the worktree.
+
 ## Available spex Skills
 
 ### Primary Workflow (via spec-kit commands)

@@ -1,4 +1,4 @@
-.PHONY: validate install uninstall reinstall check-upstream test-hook test-install test-install-remote test-setup-profile test-workflow-setup test-generated-trees test-walkthrough test-statusline test-ship-state release migrate sync-scripts sync-scripts-check help
+.PHONY: validate install uninstall reinstall check-upstream test-hook test-install test-install-remote test-setup-profile test-workflow-setup test-generated-trees test-walkthrough test-statusline test-ship-state test-worktree release migrate sync-scripts sync-scripts-check help
 
 MARKETPLACE := spex-plugin-development
 PLUGIN := spex@$(MARKETPLACE)
@@ -28,6 +28,10 @@ test-ship-state:
 
 test-statusline:
 	@tests/test_ship_statusline.sh
+
+test-worktree:
+	@tests/test_worktree.sh
+	@tests/test_init_worktrees_git.sh
 
 test-walkthrough:
 	@tests/test_runbook_status.sh
@@ -130,7 +134,8 @@ SCRIPTS_spex := spex-flow-state.sh spex-ship-state.sh spex-ship-state.py spex-sh
 SCRIPTS_spex_gates := spex-flow-state.sh spex-closeout-gate.sh spex-runbook-status.sh spex-runbook-status.py spex-verify-record.sh
 SCRIPTS_spex_collab := spex-flow-state.sh
 SCRIPTS_spex_deep_review := spex-flow-state.sh detect-cc-review.sh
-EXTENSIONS := spex spex-gates spex-collab spex-deep-review
+SCRIPTS_spex_worktrees := spex-worktree.sh
+EXTENSIONS := spex spex-gates spex-collab spex-deep-review spex-worktrees
 
 sync-scripts:
 	@echo "Syncing canonical scripts to extension directories..."
@@ -170,6 +175,8 @@ _print-scripts-spex-collab:
 	@echo $(SCRIPTS_spex_collab)
 _print-scripts-spex-deep-review:
 	@echo $(SCRIPTS_spex_deep_review)
+_print-scripts-spex-worktrees:
+	@echo $(SCRIPTS_spex_worktrees)
 
 sync-scripts-check:
 	@echo "Checking extension scripts against canonical sources..."

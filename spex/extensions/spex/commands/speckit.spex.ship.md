@@ -53,6 +53,25 @@ fi
 
 If either extension is missing, **STOP** with the error message above. Do not proceed.
 
+### Worktree Prerequisite
+
+When `spex-worktrees` is enabled, the feature branch must be created by the spec-kit `git` extension inside the worktree. Check that `git` is enabled too:
+
+```bash
+REGISTRY=".specify/extensions/.registry"
+WORKTREES_ON=$(jq -r '.extensions["spex-worktrees"].enabled // false' "$REGISTRY" 2>/dev/null)
+GIT_EXT_ON=$(jq -r '.extensions.git.enabled // false' "$REGISTRY" 2>/dev/null)
+if [ "$WORKTREES_ON" = "true" ] && [ "$GIT_EXT_ON" != "true" ]; then
+  echo "ERROR: spex-worktrees requires the spec-kit git extension, which is not enabled."
+  echo ""
+  echo "Fix it with one of:"
+  echo "  specify extension add git   (or: specify extension enable git)"
+  echo "  specify extension disable spex-worktrees"
+fi
+```
+
+If the error is printed, **STOP**. Never create a feature branch by hand in the main checkout as a workaround.
+
 ### Dirty Worktree Check
 
 Before starting the pipeline, check for uncommitted changes that are NOT spex configuration files:
@@ -66,7 +85,9 @@ if [ -n "$DIRTY" ]; then
 fi
 ```
 
-If there are dirty non-spex files, commit them automatically with a "WIP: save before ship" message, then proceed. Do NOT stop or ask the user. Spex config files (`.claude/skills/speckit-*`, `.claude/settings.*`, `.specify/extensions/`) are expected to be dirty after init and should be ignored.
+**With `spex-worktrees` enabled, skip this check entirely.** Do not commit, stage or stash anything in the main checkout. The pipeline runs in a new worktree that starts from the default branch's tip, so uncommitted changes in the main checkout never reach the feature branch, and they may belong to another session working there.
+
+Without `spex-worktrees`: if there are dirty non-spex files, commit them automatically with a "WIP: save before ship" message, then proceed. Do NOT stop or ask the user. Spex config files (`.claude/skills/speckit-*`, `.claude/settings.*`, `.specify/extensions/`) are expected to be dirty after init and should be ignored.
 
 ### External Tool Auth Validation
 
@@ -239,7 +260,7 @@ RECOVERY_DIR=$("$WORKTREE_CWD")
 [ -n "$RECOVERY_DIR" ] && cd "$RECOVERY_DIR"
 ```
 
-The script uses `SHIP_STATE_FILE` (set as an absolute path during initialization) to find the worktree root. It is safe to call unconditionally; it outputs nothing when CWD is already correct or when not in a worktree.
+The script uses `SHIP_STATE_FILE` to find the worktree root. With `spex-worktrees` enabled, Stage 0 re-exports `SHIP_STATE_FILE` to the worktree's `.specify/.spex-state` right after `prepare` (and again after `finalize`, which may move the worktree directory), so from then on recovery always returns to the worktree, never to the main checkout. It is safe to call unconditionally; it outputs nothing when CWD is already correct or when not in a worktree.
 
 ## Ship Pipeline Guard
 
@@ -466,36 +487,49 @@ Extension overlays (e.g., `spex-gates` adding review after specify) may run thei
 
 **Even if spec.md already exists**, this stage re-creates it from the brainstorm document. A fresh pipeline means fresh artifacts.
 
-1. Read the brainstorm document content.
-2. Invoke `/speckit-specify` passing the brainstorm content as the feature description.
-   - The brainstorm content provides the problem statement, approaches considered, and decisions made.
-   - Pass it as the user input to the specify command.
-   - **Do not pause** after specify completes, even if an extension overlay runs a review or asks for confirmation. Proceed directly to step 4.
-   - **CRITICAL: Specify triggers `after_specify` hooks (including worktree-manage).** When the last hook returns (you may see a "WORKTREE_CREATED" message or a completion box), you are back in the ship pipeline. Do NOT stop. Immediately proceed to step 4.
-4. After specify completes (including all its hooks), extract the feature branch name and handle worktree integration:
-   ```bash
-   FEATURE_BRANCH=$(git branch --show-current)
-   ```
-
-5. **Worktree integration:** If the `spex-worktrees` extension is enabled, check whether the `after_specify` hook already created a worktree. If not, create one now (the hook is optional and may have been skipped).
+1. Read the brainstorm document content. Do this first, from the main checkout: an uncommitted brainstorm file does not exist in the worktree. The file stays in the main checkout and is never copied or committed into the worktree.
+2. **Prepare the worktree (worktrees enabled only).** Check whether `spex-worktrees` is enabled:
    ```bash
    WORKTREE_ENABLED=$(jq -r '.extensions["spex-worktrees"].enabled // false' .specify/extensions/.registry 2>/dev/null)
    ```
-   If `WORKTREE_ENABLED` is `true`, look for an existing worktree for the feature branch:
+   If `WORKTREE_ENABLED` is `true`, create the feature worktree **before** invoking `/speckit-specify`, so the main checkout never switches branches. Derive the short name from the brainstorm file name (drop the number prefix and the extension, lowercase it, and turn anything other than letters and digits into hyphens: `brainstorm/07-comment-threads.md` becomes `comment-threads`). Pass it in single quotes, and never splice the brainstorm title or other free text into the command (backticks or `$(...)` in it would run):
    ```bash
-   WORKTREE_PATH=$(git worktree list --porcelain | grep -B1 "branch refs/heads/$FEATURE_BRANCH" | head -1 | sed 's/^worktree //')
+   .specify/extensions/spex-worktrees/scripts/spex-worktree.sh prepare --short-name '<short-name>'
    ```
+   - On exit code 1 or 2: **pause the pipeline as a blocker at every oversight level** (`"$SHIP_STATE" pause`), show the `ERROR:` lines and the remedy, and stop. Do not fall back to specifying in the main checkout.
+   - On `WORKTREE_PREPARED` (or `WORKTREE_READY`): run `cd '<path>'` with the path from the last output line, then point the state file at the worktree. `prepare` moved the ship state there, because its `stage` is `specify`:
+     ```bash
+     export SHIP_STATE_FILE="$(pwd -P)/.specify/.spex-state"
+     ```
+     Show any `NOTICE:` line in the log. From now on the pipeline runs entirely inside the worktree.
+   - On `WORKTREE_SKIPPED`: continue in the current directory.
 
-   If a worktree path is found and it is not the current directory:
-   - Run `cd "$WORKTREE_PATH"` to switch into the worktree.
-   - Verify `.specify/.spex-state` exists in the worktree.
-   - Log: "Switched to worktree at $WORKTREE_PATH. Main directory remains on default branch."
-   - Update `SHIP_STATE` to point to the worktree's copy of the state script (the path is relative, so cd handles this).
+   If worktrees are NOT enabled, skip this step (existing behavior).
+3. Invoke `/speckit-specify` passing the brainstorm content as the feature description.
+   - The brainstorm content provides the problem statement, approaches considered, and decisions made.
+   - Pass it as the user input to the specify command.
+   - When a worktree was prepared in step 2, tell specify to reuse the **same short name** and to run `speckit.git.feature` with `GIT_BRANCH_NAME` set to the `branch=` value of the `WORKTREE_PREPARED` line, so the branch matches the worktree directory exactly. Its `before_specify` worktree hook finds the prepared worktree and returns `WORKTREE_READY` without changing anything.
+   - If `/speckit-specify` fails before the feature branch exists (for example `speckit.git.feature` reports that the branch is taken), roll back as described in `speckit.spex-worktrees.manage`, Action: Prepare, Step 4: copy the ship state back to the main checkout, re-export `SHIP_STATE_FILE` there, remove the prepared worktree, then pause the pipeline as a blocker. Never retry specify in the main checkout.
+   - **Do not pause** after specify completes, even if an extension overlay runs a review or asks for confirmation. Proceed directly to step 4.
+   - **CRITICAL: Specify triggers `after_specify` hooks (including the worktree `finalize` hook).** When the last hook returns (you may see a `WORKTREE_FINALIZED` line), you are back in the ship pipeline. Do NOT stop. Immediately proceed to step 4.
+4. **Finalize the worktree (worktrees enabled only).** Run finalize again from the current directory. It is idempotent when the hook already ran, and it covers a skipped hook:
+   ```bash
+   .specify/extensions/spex-worktrees/scripts/spex-worktree.sh finalize
+   ```
+   Act on the status line:
+   - `WORKTREE_FINALIZED` or `WORKTREE_ADOPTED`: run `cd '<path>'` with the path from the last output line (a `cd ` line), then re-export the state file path, because finalize may move the worktree directory when the branch name differs from it:
+     ```bash
+     export SHIP_STATE_FILE="$(pwd -P)/.specify/.spex-state"
+     ```
+   - `WORKTREE_SKIPPED reason=prepared-worktree-exists`: the session was reset to the main checkout. `cd` into this feature's worktree (listed in the output, or found with `git worktree list` via the branch in the ship state), run finalize there, and continue with the result.
+   - Any other `WORKTREE_SKIPPED`: there is no `cd` line; stay where you are.
+   - Exit code 1: pause the pipeline as a blocker.
 
-   If `WORKTREE_ENABLED` is `true` but NO worktree was found (the hook was skipped), invoke `/speckit-spex-worktrees-manage` to create one. This runs the worktree create action, which commits spec files, switches the main repo to the default branch, and creates a sibling worktree. After it completes, re-detect the worktree path and `cd` into it as above.
-
-   If worktrees are NOT enabled, stay in the current directory (existing behavior).
-
+   Then verify, when worktrees are enabled, that the pipeline really is inside a linked worktree on a branch: `git rev-parse --git-dir` must differ from `git rev-parse --git-common-dir`, and `git branch --show-current` must not be empty. If either check fails, pause the pipeline as a blocker instead of continuing in the main checkout.
+5. Read the feature branch name from inside the worktree (or the current checkout when worktrees are disabled). Never read it from the main checkout:
+   ```bash
+   FEATURE_BRANCH=$(git branch --show-current)
+   ```
 6. Run `"$SHIP_STATE" advance` to move to Stage 1, then **immediately** begin it (do not stop).
 
 ### Stage 1: Clarify (ALWAYS runs, even if the spec "looks clear")

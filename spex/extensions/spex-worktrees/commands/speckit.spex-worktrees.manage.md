@@ -1,34 +1,51 @@
 ---
 name: speckit.spex-worktrees.worktree
-description: Manage git worktrees for isolated feature development - create after specify, list active worktrees, finish and cleanup
-argument-hint: "[list|cleanup|finish]"
+description: Manage git worktrees for isolated feature development - create the worktree with the feature branch, list active worktrees, finish and cleanup
+argument-hint: "[list|prepare|finalize|adopt|ensure|finish|cleanup]"
 ---
 
 # Git Worktree Management for spex
 
 ## Overview
 
-This command manages git worktrees to isolate feature development. It supports four actions:
+This command manages git worktrees to isolate feature development. The worktree is created **before** the feature branch and the spec, so the main checkout never switches branches. Other sessions working in the main checkout keep committing to the default branch.
 
-- **create**: Called by the `after_specify` hook after `speckit-specify` completes. Creates a worktree, restores `main`, and prints switch instructions.
-- **ensure**: Called by the `before_implement` hook. Verifies worktree isolation exists. If already in a worktree, proceeds silently. If not, creates one (same as `create`).
+It supports these actions:
+
+- **prepare**: Called by the `before_specify` hook (priority 1). Creates a worktree at the default branch's tip and moves the session into it. The `git` extension's branch hook then creates the feature branch inside the worktree.
+- **finalize**: Called by the `after_specify` hook. Confirms the worktree, branch, `feature.json` and flow state, and keeps the session in the worktree. Falls back to **adopt** when prepare did not run.
+- **adopt** (alias: **create**): Legacy path. Moves a feature branch that is checked out in the main checkout into a new worktree.
+- **ensure**: Called by the `before_implement` hook. Verifies worktree isolation exists. If already in a worktree, proceeds silently. If not, offers **adopt**.
 - **list**: Shows all active feature worktrees with path, branch, and feature name.
 - **finish**: Merges the current worktree's branch into the default branch and removes the worktree. Use when implementation is complete.
 - **cleanup**: Detects worktrees whose branches are merged and offers removal.
+
+The **prepare**, **finalize** and **adopt** actions delegate to a script. Do not re-implement its steps inline:
+
+```bash
+WORKTREE_SCRIPT=".specify/extensions/spex-worktrees/scripts/spex-worktree.sh"
+```
+
+The script prints a machine-readable status line first (`WORKTREE_<STATUS> key=value ...`), then human-readable lines (`NOTICE:`, `WARNING:`), and, when the session has to change directory, `cd <abs-path>` as the last line. Errors go to stderr and start with `ERROR:`. Exit code `0` is success (including `READY` and `SKIPPED`), `1` is a failure with nothing left behind, `2` is a usage error.
 
 ## Action Routing
 
 Determine the action from the argument, and when there is no argument, from who invoked the command:
 
-- If invoked with argument `create`: the action is **create**. Execute immediately, no confirmation needed.
+- If invoked with argument `prepare`: the action is **prepare**. Execute immediately, no confirmation needed.
+- If invoked with argument `finalize`: the action is **finalize**. Execute immediately, no confirmation needed.
+- If invoked with argument `adopt` or `create` (`create` is kept as an alias): the action is **adopt**. Execute immediately, no confirmation needed.
 - If invoked with argument `ensure`: the action is **ensure**. See Action: Ensure below.
 - If invoked with argument `finish`: the action is **finish**.
 - If invoked with argument `cleanup`: the action is **cleanup**.
-- If invoked with **no argument as the `after_specify` hook** (that is, `speckit-specify` just ran and is executing its post-execution hooks): the action is **create**. Execute immediately, no confirmation needed.
+- If invoked with **no argument as the `before_specify` hook** (that is, `speckit-specify` is executing its pre-execution hooks): the action is **prepare**. Execute immediately, no confirmation needed.
+- If invoked with **no argument as the `after_specify` hook** (that is, `speckit-specify` just ran and is executing its post-execution hooks): the action is **finalize**. Execute immediately, no confirmation needed.
 - If invoked with **no argument as the `before_implement` hook**: the action is **ensure**.
 - Otherwise (argument `list`, or invoked directly by the user with no argument): the action is **list**.
 
-> The two hook rules matter because the `args` declared in `extension.yml` are dropped when the `specify` CLI generates `.specify/extensions.yml`. A hook therefore reaches this command with no argument at all, and must not silently fall through to **list**. Never infer `create` from repository state alone: a bare invocation typed by the user is always **list**.
+> The hook rules matter because the `args` declared in `extension.yml` are dropped when the `specify` CLI generates `.specify/extensions.yml`. A hook therefore reaches this command with no argument at all, and must not silently fall through to **list**. Never infer an action from repository state alone: a bare invocation typed by the user is always **list**.
+
+> **Hook order.** Dispatch the `before_specify` hooks sorted by `priority` (lowest first, missing priority counts as 10). The **prepare** hook (priority 1) must run before the `git` extension's `speckit.git.feature` hook (priority 10), even though the `git` hook comes first in `.specify/extensions.yml`. If the order was wrong anyway, **prepare** repairs it (late mode, see below).
 
 ## Prerequisites
 
@@ -38,346 +55,115 @@ The project must be a git repository.
 git rev-parse --git-dir >/dev/null 2>&1 || { echo "ERROR: Not a git repository"; exit 1; }
 ```
 
-## Action: Create
+## Action: Prepare
 
-This action runs after `speckit-specify` has created a feature branch and spec files.
+Runs as the `before_specify` hook, before any spec content is written. It is also run directly by `/speckit-spex-ship` (stage 0) and by the brainstorm handoff before they invoke `/speckit-specify`. In those cases the hook finds the session already inside the prepared worktree and returns `WORKTREE_READY`.
 
-### Step 1: Read Configuration
+### Step 1: Choose the short name once
 
-Read `base_path` from the worktrees extension config (or default to `.claude/worktrees`):
+Generate the feature's short name now, with the same rules the `git` extension's `speckit.git.feature` command uses (2 to 4 words, lowercase, hyphen-separated, action-noun form, for example `user-auth` or `fix-payment-timeout`). Use only lowercase letters, digits and hyphens.
+
+If `/speckit-specify` was invoked by ship or the brainstorm handoff with a short name already chosen, reuse that one. If `speckit.git.feature` already ran in this `/speckit-specify` run (hooks dispatched in file order), reuse the short name you passed to it: `prepare` takes over that branch only when its name ends with the same short name.
+
+### Step 2: Run the script
 
 ```bash
-WORKTREE_CONFIG=".specify/extensions/spex-worktrees/worktree-config.yml"
-BASE_PATH=$(yq -r '.worktrees.base_path // ".claude/worktrees"' "$WORKTREE_CONFIG" 2>/dev/null || echo ".claude/worktrees")
+"$WORKTREE_SCRIPT" prepare --short-name '<short-name>'
 ```
 
-Default: `.claude/worktrees` (inside the project directory, keeps CWD stable for the coding agent).
+Pass the short name in single quotes, and never splice free text (titles, descriptions) into the command: double quotes would let backticks or `$(...)` in that text run as commands. If the user gave an exact branch name (`GIT_BRANCH_NAME`), add `--branch '<name>'`.
 
-### Step 2: Get Current Branch
+The branch name comes from the `git` extension's `create-new-feature.sh --dry-run`, so numbering rules (sequential or timestamp, `GIT_BRANCH_NAME` override) are the same as today. Nothing is created in the main checkout.
+
+### Step 3: Act on the result
+
+- **`WORKTREE_PREPARED ... mode=early`**: run `cd '<path>'` with the path from the last output line. From now on, every remaining hook (`speckit.git.feature`, the spex flow-state hook) and every spec write of this `/speckit-specify` run happens inside the worktree. Run `speckit.git.feature` with `GIT_BRANCH_NAME` set to the `branch=` value of the status line, so the branch matches the worktree directory exactly (this matters most for timestamp numbering). Show any `NOTICE:` line to the user (for example, the main checkout is not on the default branch, and the new branch starts from the default branch anyway).
+- **`WORKTREE_PREPARED ... mode=late`**: `speckit.git.feature` already ran in the main checkout (hooks were dispatched in file order). The script restored the main checkout to its previous ref and attached the branch to the new worktree. Run `cd '<path>'`, show the `NOTICE: hook order ...` line, and continue `/speckit-specify` in the worktree. Do not run `speckit.git.feature` again.
+- **`WORKTREE_READY`**: the session is already inside a worktree. Run `cd '<path>'` (usually a no-op) and continue. Show a `WARNING:` line if one was printed (nesting is not supported, the spec is written in the current worktree).
+- **`WORKTREE_SKIPPED`**: the extension is disabled. Continue without a worktree.
+- **Exit code 1 or 2**: **STOP `/speckit-specify`.** Show the `ERROR:` lines and the remedy. Do not fall back to creating the branch or writing the spec in the main checkout. Do not run `speckit.git.feature`. Inside a ship pipeline this is a blocker at every oversight level. Late mode is taken only for a feature branch that was created moments ago and matches this run's short name (or `--branch`). If the main checkout sits on a fresh feature branch of another run, or on one that already has commits, `prepare` stops with an `ERROR:` and changes nothing.
+
+### Step 4: If `speckit.git.feature` fails inside the prepared worktree
+
+If the branch hook fails after an early-mode prepare (for example, the branch name is taken), remove the worktree, and the branch too if the hook created it before failing and it has no commits of its own. The same applies when ship or the brainstorm handoff prepared the worktree and `/speckit-specify` then fails before the branch exists. First hand the flow or ship state back to the main checkout, because `prepare` moved it into the worktree and removing the worktree would delete the only copy. Then stop:
 
 ```bash
-BRANCH_NAME=$(git rev-parse --abbrev-ref HEAD)
-```
-
-Verify it matches the `NNN-feature-name` pattern. If not, warn that worktree creation only applies to feature branches and skip.
-
-### Step 3: Detect If Already in a Worktree
-
-A git worktree has a `.git` file (not directory) pointing to the main repo. Detect this:
-
-```bash
-REPO_ROOT=$(git rev-parse --show-toplevel)
-GIT_DIR=$(git rev-parse --git-dir)
-
-# If git-dir is not <repo>/.git, we're inside a worktree
-if [ "$GIT_DIR" != "$REPO_ROOT/.git" ] && [ "$GIT_DIR" != ".git" ]; then
-  echo "WARNING: Already inside a git worktree. Skipping worktree creation."
-  echo "Worktree nesting is not supported."
-  # Stop here. Do not proceed to subsequent steps.
+MAIN_WORKTREE=$(git worktree list --porcelain | head -1 | sed 's/^worktree //')
+if [ -f '<path>/.specify/.spex-state' ] && [ ! -f "$MAIN_WORKTREE/.specify/.spex-state" ]; then
+  cp -p '<path>/.specify/.spex-state' "$MAIN_WORKTREE/.specify/.spex-state"
+fi
+cd "$MAIN_WORKTREE"
+# In a ship pipeline, point the state file back at the main checkout before pausing.
+[ -n "${SHIP_STATE_FILE:-}" ] && export SHIP_STATE_FILE="$MAIN_WORKTREE/.specify/.spex-state"
+git worktree remove --force '<path>'
+# Only a branch this run created: it exists, and has no commits beyond <base>
+# (the base= value from the WORKTREE_PREPARED line).
+if git show-ref --verify --quiet "refs/heads/<branch>" &&
+   [ "$(git rev-list --count "<base>..<branch>")" = "0" ]; then
+  git branch -D "<branch>"
 fi
 ```
 
-If inside a worktree, skip the entire create action. Do not proceed to any subsequent Create steps.
+Skip the branch deletion when the hook failed because `<branch>` already existed before this run (the "already exists" error): that branch belongs to someone else. Then report the error and stop `/speckit-specify`. Never retry `speckit.git.feature` in the main checkout.
 
-### Step 4: Compute Target Path and Validate
+## Action: Finalize
 
-Determine if the worktree should be inside or outside the project, then build the path:
+Runs as the `after_specify` hook, inside the worktree prepared above.
 
-```bash
-REPO_ROOT=$(git rev-parse --show-toplevel)
-
-# Detect inside-project worktrees (.claude/worktrees is the default)
-INSIDE_PROJECT=false
-case "$BASE_PATH" in
-  .claude/worktrees*) INSIDE_PROJECT=true ;;
-esac
-```
-
-**If inside project** (`INSIDE_PROJECT` is `true`):
+### Step 1: Run the script
 
 ```bash
-mkdir -p "$REPO_ROOT/$BASE_PATH"
-WORKTREE_PATH="$REPO_ROOT/$BASE_PATH/$BRANCH_NAME"
+"$WORKTREE_SCRIPT" finalize
 ```
 
-**If outside project** (`INSIDE_PROJECT` is `false`):
+It confirms the branch, moves the worktree directory if the branch name differs from it (the agent chose a different short name for `speckit.git.feature`), writes `.specify/feature.json` only if it points elsewhere, and sets `feature_branch` and `spec_dir` in `.specify/.spex-state`. It never creates, switches or commits anything when the worktree already exists.
 
-```bash
-REPO_NAME=$(basename "$REPO_ROOT")
+### Step 2: Act on the result
 
-# Handle both absolute and relative base paths
-if [[ "$BASE_PATH" = /* ]]; then
-  RESOLVED_BASE=$(cd "$BASE_PATH" && pwd)
-else
-  RESOLVED_BASE=$(cd "$REPO_ROOT/$BASE_PATH" && pwd)
-fi
-```
+- **`WORKTREE_FINALIZED`**: run `cd '<path>'` with the path from the last output line (the path changes when the directory was moved; only worktrees that `prepare` created are ever moved). The session stays in the worktree.
+- **`WORKTREE_ADOPTED`**: the feature branch was checked out in the main checkout, either because prepare did not run, or because `speckit.git.feature` ran in the main checkout after prepare (a `NOTICE:` line says so; the unused prepared worktree was removed). The script ran the legacy **adopt** path. Run `cd '<path>'`.
+- **`WORKTREE_SKIPPED reason=prepared-worktree-exists`**: finalize ran in the main checkout (for example after a working-directory reset) while a prepared, not yet finalized worktree exists. The main checkout was left alone. Follow the `WARNING:` lines: usually `cd` into this feature's worktree (listed in the output) and run finalize again there.
+- **`WORKTREE_SKIPPED`** (any other reason): nothing to do. There is no `cd` line.
+- **Exit code 1**: show the `ERROR:` lines and stop. In particular, finalize fails inside a prepared worktree that has no branch (`speckit.git.feature` did not run there or failed); do not continue writing the spec there.
 
-If the `cd` fails (directory does not exist), report a clear error and stop:
+### Step 3: Completion message
 
-```bash
-if [ -z "$RESOLVED_BASE" ]; then
-  echo "ERROR: base_path '$BASE_PATH' does not resolve to a valid directory."
-  echo "Check worktrees.base_path in .specify/extensions/spex-worktrees/worktree-config.yml"
-  # Stop here. Do not proceed to subsequent steps.
-fi
-```
+If `.specify/.spex-state` in the worktree has `status == "running"` (ship pipeline), print one line (`Worktree ready at <path> (pipeline mode, continuing)`) and return. Do not show a box and do not stop the pipeline.
 
-Build the worktree path using `@` as separator between repo name and branch:
-
-```bash
-WORKTREE_PATH="${RESOLVED_BASE}/${REPO_NAME}@${BRANCH_NAME}"
-```
-
-**For both paths**, verify the worktree is not inside the main repository in a disallowed location:
-
-```bash
-case "$WORKTREE_PATH" in
-  "$REPO_ROOT"/.claude/worktrees/*)
-    ;; # Allowed: inside .claude/worktrees/
-  "$REPO_ROOT"/*)
-    echo "ERROR: Worktree path is inside the main repository: $WORKTREE_PATH"
-    echo "Set base_path to '.claude/worktrees' or a directory outside the repo"
-    # Stop here. Do not proceed to subsequent steps.
-    ;;
-esac
-```
-
-Check if the target path already exists:
-
-```bash
-if [ -d "$WORKTREE_PATH" ] || [ -f "$WORKTREE_PATH" ]; then
-  echo "ERROR: Target path already exists: $WORKTREE_PATH"
-  echo "Remove it manually or choose a different base_path in .specify/extensions/spex-worktrees/worktree-config.yml"
-  # Stop here. Do not proceed to subsequent steps.
-fi
-```
-
-### Step 5: Commit All Tracked Changes to Feature Branch
-
-Before switching away from the feature branch, commit all modified tracked files. This includes spec files, `.specify/` configuration changes, and any other modified tracked files. Stage changes in two passes to avoid capturing unintended untracked files:
-
-```bash
-# Stage modifications to already-tracked files
-git add -u
-
-# Stage new spec and brainstorm artifacts (these are untracked but expected)
-# Read the actual spec directory from feature.json (may differ from branch name
-# when feature numbering is sequential but branch uses issue numbers)
-SPEC_DIR=""
-if [ -f ".specify/feature.json" ]; then
-  SPEC_DIR=$(jq -r '.feature_directory // empty' ".specify/feature.json" 2>/dev/null)
-fi
-SPEC_DIR="${SPEC_DIR:-specs/$BRANCH_NAME}"
-[ -d "$SPEC_DIR" ] && git add "$SPEC_DIR"
-[ -d "brainstorm" ] && git add brainstorm/
-[ -d ".specify" ] && git add .specify/
-
-if ! git diff --cached --quiet; then
-  git commit -m "feat: Add spec for $BRANCH_NAME
-
-Assisted-By: 🤖 Claude Code"
-fi
-```
-
-Using `git add -u` (tracked modifications only) plus explicit paths for new spec artifacts limits the commit scope to intended files. The `git diff --cached --quiet` guard skips the commit when there are no staged changes, avoiding empty commits.
-
-### Step 5b: Capture Feature Directory and Flow State Before Branch Switch
-
-The next step switches to the default branch, which changes tracked files on disk. Since `.specify/feature.json` is tracked, its contents will revert to whatever the default branch has. And `.specify/.spex-state` is gitignored, so it won't survive the branch switch. Capture both now, while still on the feature branch:
-
-```bash
-FEATURE_DIR=""
-if [ -f ".specify/feature.json" ]; then
-  FEATURE_DIR=$(jq -r '.feature_directory // empty' ".specify/feature.json")
-fi
-# Fallback to branch-derived path if feature.json is missing or empty
-FEATURE_DIR=${FEATURE_DIR:-"specs/$BRANCH_NAME"}
-
-# Capture flow state content (gitignored, will be lost on branch switch)
-SPEX_STATE_CONTENT=""
-if [ -f ".specify/.spex-state" ]; then
-  SPEX_STATE_CONTENT=$(cat ".specify/.spex-state")
-fi
-```
-
-These values are used in Step 8b to set the correct feature context in the worktree.
-
-### Step 6: Restore Default Branch (before worktree creation)
-
-Git does not allow two worktrees to have the same branch checked out. Since `speckit-specify` just created and checked out the feature branch, we must switch back to the default branch before creating a worktree for that branch.
-
-Detect the default branch dynamically with a fallback chain:
-
-```bash
-DEFAULT_BRANCH=$(git symbolic-ref refs/remotes/origin/HEAD 2>/dev/null | sed 's@^refs/remotes/origin/@@')
-if [ -z "$DEFAULT_BRANCH" ]; then
-  # origin/HEAD not set (common with git init + remote add). Try common names.
-  for candidate in main master; do
-    if git rev-parse --verify "$candidate" >/dev/null 2>&1; then
-      DEFAULT_BRANCH="$candidate"
-      break
-    fi
-  done
-fi
-DEFAULT_BRANCH=${DEFAULT_BRANCH:-main}
-```
-
-```bash
-if ! git checkout "$DEFAULT_BRANCH" 2>&1; then
-  echo "WARNING: Could not switch back to $DEFAULT_BRANCH."
-  echo "You likely have uncommitted changes. Commit or stash them first."
-  echo "The repository remains on branch $BRANCH_NAME."
-  echo "Worktree creation skipped (cannot create worktree while branch is checked out here)."
-  # Stop here. Do not proceed to subsequent steps.
-fi
-```
-
-### Step 7: Create the Worktree
-
-Now that the current worktree is on the default branch, create a new worktree for the feature branch. If this fails (disk full, permission denied, etc.), report the error clearly:
-
-```bash
-if ! git worktree add "$WORKTREE_PATH" "$BRANCH_NAME" 2>&1; then
-  echo "ERROR: Failed to create worktree at $WORKTREE_PATH"
-  echo "The repository is on $DEFAULT_BRANCH. The feature branch $BRANCH_NAME still exists."
-  echo "Resolve the issue and retry, or switch to the branch manually: git checkout $BRANCH_NAME"
-  # Stop here. Do not proceed to subsequent steps.
-fi
-```
-
-### Step 8: Copy Configuration to Worktree
-
-Gitignored config directories (`.claude/` and `.specify/`) won't exist in the new worktree. Copy them so spec-kit extensions, skills, and settings work immediately without re-running init:
-
-```bash
-# Copy .specify/ (extensions registry, hooks, state, config)
-if [ -d ".specify" ]; then
-  rsync -a --exclude='.git' ".specify/" "$WORKTREE_PATH/.specify/"
-fi
-
-# Copy .claude/ (skills, settings, commands)
-# Exclude worktrees/ to avoid copying the worktree into itself when base_path is .claude/worktrees
-if [ -d ".claude" ]; then
-  rsync -a --exclude='worktrees/' ".claude/" "$WORKTREE_PATH/.claude/"
-fi
-```
-
-If the spec directory exists in the main repo but not in the worktree (e.g., when specs are gitignored or were not committed), copy it:
-
-```bash
-# Copy spec directory if it exists locally but not in the worktree
-# (happens when specs are gitignored/excluded, or when git add missed them)
-if [ -n "$FEATURE_DIR" ] && [ -d "$FEATURE_DIR" ] && [ ! -d "$WORKTREE_PATH/$FEATURE_DIR" ]; then
-  mkdir -p "$WORKTREE_PATH/$(dirname "$FEATURE_DIR")"
-  rsync -a "$FEATURE_DIR/" "$WORKTREE_PATH/$FEATURE_DIR/"
-fi
-```
-
-Some projects do not keep their skills or config directly under `.claude/`, but link to a directory elsewhere in the repo (for example `.claude/skills -> ../.agents/skills/`, a layout shared by projects that support several coding agents). `rsync -a` copies the symlink itself, not what it points at, and the target directory is usually gitignored, so it is absent from a fresh worktree and the link dangles. Copy any such target:
-
-```bash
-# Follow symlinks under .claude/ and .specify/ that point elsewhere inside the
-# repo, and copy their targets. Without this, a link like
-# .claude/skills -> ../.agents/skills/ dangles in the worktree and every skill
-# disappears, because .agents/ is gitignored and nothing else copies it.
-REPO_ROOT=$(git rev-parse --show-toplevel)
-
-find .claude .specify -path '.claude/worktrees' -prune -o -type l -print 2>/dev/null | while read -r LINK; do
-  TARGET=$(python3 -c 'import os,sys; print(os.path.realpath(sys.argv[1]))' "$LINK" 2>/dev/null)
-  [ -d "$TARGET" ] || continue
-
-  # Only targets inside the repo matter. A link to ~/.claude/... resolves the
-  # same way from the worktree, so leave it alone.
-  case "$TARGET" in
-    "$REPO_ROOT"/*) REL="${TARGET#"$REPO_ROOT"/}" ;;
-    *) continue ;;
-  esac
-
-  # Skip what the two rsync calls above already copied.
-  case "$REL" in
-    .claude/*|.specify/*) continue ;;
-  esac
-
-  # Skip anything the checkout already provided (target is tracked).
-  if [ -e "$WORKTREE_PATH/$REL" ]; then continue; fi
-
-  mkdir -p "$WORKTREE_PATH/$(dirname "$REL")"
-  rsync -a "$TARGET/" "$WORKTREE_PATH/$REL/"
-done
-```
-
-This ensures the worktree has the same extensions, hooks, permissions, skills, and spec files as the main repo. No `/spex:init` needed in the worktree.
-
-Do NOT write spex-detach exclude entries here. Git's `.git/info/exclude` is shared across all worktrees via `git-common-dir`, so the worktree already sees exactly the stealth mode state of the main checkout. Running `spex-detach.sh enable` from this command would turn stealth mode on behind the user's back (the `.specify/extensions/spex-detach/` directory exists even when the extension is disabled, and a user who ran `disable` would get the entries back on every new worktree). Stealth mode is toggled only through `/speckit-spex-detach-detach`.
-
-### Step 8b: Update feature.json and flow state for the Worktree Branch
-
-The copied `.specify/feature.json` may point to whatever feature was active on the default branch (since feature.json is tracked and reverts on branch switch). Write the correct value captured in Step 5b:
-
-```bash
-FEATURE_JSON="$WORKTREE_PATH/.specify/feature.json"
-jq -n --arg dir "$FEATURE_DIR" '{"feature_directory": $dir}' > "$FEATURE_JSON"
-```
-
-This writes the `FEATURE_DIR` value captured in Step 5b, which reflects the actual spec directory created by speckit-specify (not a branch-name derivation that may differ).
-
-The `.specify/.spex-state` file is gitignored but persists on disk across branch switches. It may still be present in the main repo after `git checkout $DEFAULT_BRANCH`. Restore it to the worktree from the content captured in Step 5b, then remove it from the main repo to prevent the statusline from showing stale state:
-
-```bash
-STATE_FILE="$WORKTREE_PATH/.specify/.spex-state"
-if [ -n "$SPEX_STATE_CONTENT" ]; then
-  echo "$SPEX_STATE_CONTENT" | jq --arg branch "$BRANCH_NAME" --arg dir "$FEATURE_DIR" \
-    '.feature_branch = $branch | .spec_dir = $dir' > "$STATE_FILE"
-fi
-
-# Remove stale state from main repo — the pipeline continues in the worktree
-rm -f ".specify/.spex-state"
-```
-
-This restores the flow state (including any quality gate results from the specify phase) in the worktree and ensures the main repo's statusline does not display stale pipeline progress.
-
-### Step 9: Print Output
-
-Print a machine-readable line followed by human-readable instructions:
-
-```bash
-echo "WORKTREE_CREATED path=$WORKTREE_PATH"
-```
-
-Then check whether this is running inside a ship pipeline:
-
-```bash
-if [ -n "$SPEX_STATE_CONTENT" ] && echo "$SPEX_STATE_CONTENT" | jq -e '.status == "running"' >/dev/null 2>&1; then
-  # Pipeline mode: suppress the completion box to avoid stalling the pipeline.
-  # Ship will handle the CWD switch and continue to the next stage.
-  echo "Worktree created at $WORKTREE_PATH (pipeline mode, continuing)"
-else
-  # Interactive mode: print full instructions for the user.
-fi
-```
-
-**Interactive mode output** (when NOT in pipeline mode):
-
-For inside-project worktrees, show the relative path (e.g., `.claude/worktrees/032-feature`). For external worktrees, show the absolute path.
+Otherwise (interactive), the session stays in the worktree, so `/speckit-clarify` or `/speckit-plan` can run next in the same session. Show:
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Worktree created at <display-path>                          │
+│ Spec written in worktree <display-path>                     │
 │                                                             │
-│ To continue with planning/implementation:                   │
+│ This session now works in the worktree. Continue here with  │
+│ /speckit-clarify or /speckit-plan.                          │
+│                                                             │
+│ To open a new session in the worktree instead:              │
 │   cd <worktree-path> && claude                              │
 │                                                             │
-│ Config (.claude/ and .specify/) has been copied.            │
-│ All extensions and skills are ready to use.                 │
-│                                                             │
-│ The spec file contains all context from this session.       │
+│ The main checkout was not switched. Config (.claude/ and    │
+│ .specify/) has been copied into the worktree.               │
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Where `<display-path>` is `.claude/worktrees/<branch>` for inside-project worktrees, or the full absolute path for external worktrees.
+Where `<display-path>` is `.claude/worktrees/<branch>` for inside-project worktrees, or the full absolute path for external worktrees, and `<worktree-path>` is the absolute path from the `cd` line.
 
-Use the actual `WORKTREE_PATH` value (computed in Step 4) in the output.
+## Action: Adopt
+
+Legacy path for a feature branch that is checked out in the main checkout (a feature specified before worktree-first specify existed, or `spex-worktrees` enabled afterwards). Used by **finalize** as a fallback and by **ensure**. The argument `create` is an alias.
+
+```bash
+"$WORKTREE_SCRIPT" adopt
+```
+
+The script commits only the feature's spec directory to the feature branch (never `git add -u`, never `brainstorm/`), switches the main checkout back to the default branch, creates the worktree, copies `.specify/` and `.claude/` (plus in-repo symlink targets), and moves the flow state into the worktree.
+
+- **`WORKTREE_CREATED path=<abs> branch=<name>`**: run `cd <path>` with the path from the last line. Show the completion box from Action: Finalize Step 3 (or the one-line pipeline message when `status == "running"`).
+- **`WORKTREE_READY`** or **`WORKTREE_SKIPPED`**: nothing to do. Show any `WARNING:` line.
+- **Exit code 1**: show the `ERROR:` lines and stop. Do not switch branches by hand.
+
+Do NOT write spex-detach exclude entries for the new worktree. Git's `.git/info/exclude` is shared across all worktrees via `git-common-dir`, so the worktree already sees exactly the stealth mode state of the main checkout. Stealth mode is toggled only through `/speckit-spex-detach-detach`.
 
 ## Action: Ensure
 
@@ -390,7 +176,7 @@ REPO_ROOT=$(git rev-parse --show-toplevel)
 GIT_DIR=$(git rev-parse --git-dir)
 
 if [ "$GIT_DIR" != "$REPO_ROOT/.git" ] && [ "$GIT_DIR" != ".git" ]; then
-  # Already in a worktree — isolation exists, nothing to do
+  # Already in a worktree: isolation exists, nothing to do
   exit 0
 fi
 ```
@@ -429,7 +215,7 @@ Present a single-select question to the user:
   - "Create worktree (Recommended)": "Isolate implementation in a git worktree"
   - "Continue without worktree": "Implement directly on the current branch (no isolation)"
 
-If the user selects "Create worktree", execute the full **Action: Create** flow (Steps 1-9 above).
+If the user selects "Create worktree", execute **Action: Adopt** above (`"$WORKTREE_SCRIPT" adopt`), then `cd` into the printed path. The adopt commit holds only the feature's spec directory; other uncommitted changes stay in the main checkout.
 
 If the user selects "Continue without worktree", proceed without isolation.
 

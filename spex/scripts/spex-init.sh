@@ -434,6 +434,11 @@ install_extensions() {
   # The init skill handles enable/disable via AskUserQuestion.
   local optional_extensions=()
 
+  # Remove + add re-registers an extension as enabled. Remember which ones
+  # the user had disabled, so they can be disabled again afterwards.
+  local registry=".specify/extensions/.registry" prev_disabled=""
+  prev_disabled=$(jq -r '.extensions // {} | to_entries[] | select(.value.enabled == false) | .key' "$registry" 2>/dev/null || true)
+
   local installed=0 failed=0
   for ext_id in "${install_order[@]}"; do
     local ext_path="$extensions_dir/$ext_id"
@@ -482,18 +487,60 @@ install_extensions() {
 
   echo "  Extensions: $installed installed, $failed failed"
 
-  # Enforce git extension dependency: worktrees needs git for branch creation
-  if [ -d ".specify/extensions/spex-worktrees" ]; then
+  # Restore the user's disabled extensions.
+  local prev_id
+  for prev_id in $prev_disabled; do
+    if [ "$(jq -r --arg id "$prev_id" '.extensions[$id].enabled // empty' "$registry" 2>/dev/null)" = "true" ]; then
+      specify extension disable "$prev_id" >/dev/null 2>&1 ||
+        echo "WARNING: could not disable extension '$prev_id' again" >&2
+    fi
+  done
+
+  # Enforce git extension dependency: worktrees needs git for branch creation.
+  # With spex-worktrees enabled and no git extension, specify would fall back
+  # to a hand-made branch in the main checkout, so refuse the setup instead.
+  # A spex-worktrees the user had disabled never triggers the refusal, even
+  # if restoring the disabled state above failed.
+  local worktrees_enabled
+  worktrees_enabled=$(jq -r '.extensions["spex-worktrees"].enabled // false' "$registry" 2>/dev/null || echo false)
+  if printf '%s\n' "$prev_disabled" | grep -qxF "spex-worktrees"; then
+    worktrees_enabled=false
+  fi
+  if [ "$worktrees_enabled" = "true" ]; then
     local git_enabled
-    git_enabled=$(jq -r '.extensions.git.enabled // false' .specify/extensions/.registry 2>/dev/null)
+    git_enabled=$(jq -r '.extensions.git.enabled // false' "$registry" 2>/dev/null || echo false)
     if [ "$git_enabled" != "true" ]; then
-      if specify extension enable git 2>/dev/null; then
+      # Enable it, or install the bundled git extension when it is missing.
+      if specify extension enable git >/dev/null 2>&1 || specify extension add git >/dev/null 2>&1; then
+        git_enabled=$(jq -r '.extensions.git.enabled // false' "$registry" 2>/dev/null || echo false)
+      fi
+      if [ "$git_enabled" = "true" ]; then
         echo "  Enabled git extension (required by spex-worktrees)"
       else
-        echo "  WARNING: git extension not available (required by spex-worktrees for branch creation)" >&2
+        worktrees_git_error
+        exit 1
       fi
     fi
   fi
+}
+
+# True when spex-worktrees is enabled but the git extension is not.
+worktrees_missing_git() {
+  local registry=".specify/extensions/.registry"
+  [ "$(jq -r '.extensions["spex-worktrees"].enabled // false' "$registry" 2>/dev/null || echo false)" = "true" ] &&
+    [ "$(jq -r '.extensions.git.enabled // false' "$registry" 2>/dev/null || echo false)" != "true" ]
+}
+
+# Error shown when spex-worktrees is enabled but the git extension is not.
+worktrees_git_error() {
+  {
+    echo "ERROR: spex-worktrees requires the spec-kit git extension"
+    echo "The git extension creates the feature branch inside the worktree; without it the branch would be made in the main checkout."
+    echo "Fix it with one of:"
+    echo "  specify extension add git      (or: specify extension enable git)"
+    echo "  specify extension disable spex-worktrees"
+    echo "Then run /spex:init again."
+  } >&2
 }
 
 # --- Migrate legacy constitution symlink setup ---
@@ -704,7 +751,11 @@ case "${1:-}" in
     if check_ready; then
       fix_constitution
 
-      install_extensions >/dev/null 2>&1 || true
+      # Quiet install, but never swallow the spex-worktrees/git refusal.
+      if ! (install_extensions) >/dev/null 2>&1 && worktrees_missing_git; then
+        worktrees_git_error
+        exit 1
+      fi
       ensure_extension_skills 2>/dev/null || true
       configure_statusline 2>/dev/null || true
       configure_git_exclude 2>/dev/null || true

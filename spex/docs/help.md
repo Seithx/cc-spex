@@ -109,9 +109,15 @@ spex EXTENSIONS (quality gates for spec-kit commands)
                                --external, --coderabbit, --copilot, --codex
 
   spex-worktrees extension:
-    /speckit-specify  → creates worktree at .claude/worktrees/<branch>,
-                        restores main (also auto-created by ship)
-    /speckit-spex-worktrees-manage → list, create, finish, or cleanup worktrees
+    /speckit-specify  → creates the worktree at .claude/worktrees/<branch>
+                        FIRST, then the branch and spec inside it; the main
+                        checkout never switches branches. The session stays
+                        in the worktree (also done by ship and the brainstorm
+                        handoff). Needs the git extension. After upgrading,
+                        run /spex:init --refresh to register the new hook.
+    /speckit-spex-worktrees-manage → list, finish, or cleanup worktrees
+                        (prepare/finalize run as specify hooks, adopt moves
+                        an old-flow feature branch into a worktree)
                         Default location: .claude/worktrees/ (inside project)
                         Override: worktrees.base_path in worktree-config.yml
 
@@ -174,7 +180,8 @@ spex COMMANDS (helpers and configuration)
                                 Requires: spex-gates + spex-deep-review extensions
                                 Flags: --ask always|smart|never,
                                        --resume [--ask <level>], --start-from <stage>
-                                Worktree: auto-creates if spex-worktrees enabled
+                                Worktree: created before specify if spex-worktrees
+                                enabled; main checkout stays on its branch
                                 8 stages, then completion prompt (submit PR / merge / stop)
   /speckit-spex-walkthrough   Try the feature with a tutorial-style RUNBOOK.md
                                 Testability check first: one line, no files, when nothing

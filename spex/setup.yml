@@ -375,11 +375,18 @@ steps:
       SELECTED="{{ steps.selected-extensions.output.stdout }}"
       case ",$SELECTED," in
         *,spex-worktrees,*)
-          if specify extension enable git 2>/dev/null; then
+          if jq -e '.extensions.git.enabled == true' .specify/extensions/.registry >/dev/null 2>&1; then
+            :
+          elif specify extension enable git >/dev/null 2>&1 || specify extension add git >/dev/null 2>&1; then
             echo "Enabled git extension (required by spex-worktrees for branch creation)" >&2
-          elif ! specify extension list 2>/dev/null | grep -q "^.*git.*Enabled"; then
-            echo "WARNING: git extension not available. spex-worktrees requires it for branch creation." >&2
-            echo "Worktree creation will fail until the git extension is installed." >&2
+          fi
+          if ! jq -e '.extensions.git.enabled == true' .specify/extensions/.registry >/dev/null 2>&1; then
+            echo "ERROR: spex-worktrees requires the spec-kit git extension" >&2
+            echo "The git extension creates the feature branch inside the worktree; without it the branch would be made in the main checkout." >&2
+            echo "Fix it with one of:" >&2
+            echo "  specify extension add git      (or: specify extension enable git)" >&2
+            echo "  specify extension disable spex-worktrees (or leave spex-worktrees out of the extension selection)" >&2
+            exit 1
           fi
           ;;
       esac

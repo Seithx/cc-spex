@@ -54,11 +54,14 @@ provides:
       description: "Clear spex state: dismiss status line, remove stale flow/ship artifacts"
 
 hooks:
+  # Priority 2: must run after the spex-worktrees `prepare` hook (priority 1),
+  # so the flow state is written inside the feature worktree, not the main
+  # checkout.
   before_specify:
     command: speckit.spex.flow-state
     args: "running specify"
     optional: false
-    priority: 1
+    priority: 2
     description: "Initialize flow state and status line before specification"
   after_specify:
     command: speckit.spex.flow-state

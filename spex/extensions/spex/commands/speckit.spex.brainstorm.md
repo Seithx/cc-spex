@@ -167,7 +167,24 @@ After the brainstorm document is written and overview updated, {harness:interact
 
 {harness:interactive-choice-must} Do NOT output the options as text and wait for a free-form reply.
 
-If the user chooses "Specify step-by-step": invoke `/speckit-specify` with the brainstorm document as context.
+If the user chooses "Specify step-by-step": invoke `/speckit-specify` with the brainstorm document as context. When the `spex-worktrees` extension is enabled, prepare the feature worktree first, so the main checkout never switches branches:
+
+```bash
+WORKTREES_ENABLED=$(jq -r '.extensions["spex-worktrees"].enabled // false' .specify/extensions/.registry 2>/dev/null)
+```
+
+If `WORKTREES_ENABLED` is `true`:
+
+1. Derive the short name from the brainstorm file name: drop the number prefix and the extension, lowercase it, and turn anything other than letters and digits into hyphens (`brainstorm/07-comment-threads.md` becomes `comment-threads`).
+2. From the main checkout, run the command below. Pass the short name in single quotes, and never splice the brainstorm title or other free text into it (backticks or `$(...)` would run):
+   ```bash
+   .specify/extensions/spex-worktrees/scripts/spex-worktree.sh prepare --short-name '<short-name>'
+   ```
+3. On exit code 1 or 2, show the `ERROR:` lines and **stop**. Do not fall back to running `/speckit-specify` in the main checkout.
+4. Otherwise run `cd '<path>'` with the path from the last output line (`cd <abs-path>`), and show any `NOTICE:` line.
+5. Invoke `/speckit-specify` from inside the worktree, passing the brainstorm content (read it before the `cd`; an uncommitted brainstorm file does not exist in the worktree) and telling it to reuse the same short name and to run `speckit.git.feature` with `GIT_BRANCH_NAME` set to the `branch=` value of the `WORKTREE_PREPARED` line. Its `before_specify` worktree hook finds the prepared worktree and continues without a warning. If `/speckit-specify` then fails before the feature branch exists, roll back as described in `speckit.spex-worktrees.manage`, Action: Prepare, Step 4 (hand the flow state back to the main checkout, then remove the prepared worktree).
+
+The brainstorm file itself stays in the main checkout. It is not copied or committed into the worktree.
 
 If the user chooses "Ship autonomously": before invoking ship, {harness:interactive-choice} to pick the oversight level, which controls how and when the pipeline stops for questions:
 
@@ -178,7 +195,7 @@ If the user chooses "Ship autonomously": before invoking ship, {harness:interact
   - "Always ask": "Pause on every review finding and ask clarification questions interactively. Most control, slowest."
   - "Never ask": "Auto-fix everything that can be fixed, pause only on blockers (failing tests, security issues, contradictions)"
 
-{harness:interactive-choice-must}
+{harness:interactive-choice-must} Do NOT output the options as text and wait for a free-form reply.
 
 Then invoke `/speckit-spex-ship` with the brainstorm document path and the matching flag: `--ask smart`, `--ask always`, or `--ask never`.
 
@@ -714,3 +731,5 @@ User: A
 
 [Invokes /speckit-spex-ship brainstorm/NN-comments.md --ask smart]
 ```
+
+Had the user picked A (Specify step-by-step) with `spex-worktrees` enabled, the handoff would first run `spex-worktree.sh prepare --short-name 'comments'` from the main checkout, `cd` into the printed worktree path, and only then invoke `/speckit-specify` there with the brainstorm content and the same short name.

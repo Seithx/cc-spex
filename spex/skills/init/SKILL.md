@@ -10,7 +10,8 @@ You MUST complete ALL steps below. Do not stop after Step 1.
 Run the command from `<spex-init-command>` in the `<spex-context>` system reminder. This is your first and only Bash call. Do not run anything else before it.
 
 - If output contains `NEED_INSTALL`: show output, STOP.
-- If output contains `ERROR`: show error, STOP.
+- If output contains `ERROR` or the script exits with a non-zero status other than `3` (`3` means `RESTART_REQUIRED`): show the error, STOP. Do not continue to Step 2, Step 3 or the restart advice.
+  - In particular, init exits with status `1` and `ERROR: spex-worktrees requires the spec-kit git extension` when `spex-worktrees` is enabled but the `git` extension cannot be enabled. Show the message with its two fixes (`specify extension add git` / `specify extension enable git`, or `specify extension disable spex-worktrees`) and tell the user to run `/spex:init` again afterwards.
 - If the command was run with `--refresh` or `--update` and output contains `RESTART_REQUIRED`: **SKIP Steps 2 and 3.** Templates and extensions were refreshed but the existing configuration (enabled extensions, permissions) is preserved. Go directly to Step 4 and report that the refresh completed. Tell the user to restart Claude Code.
 - If output contains `READY` or `RESTART_REQUIRED`: **do not summarize yet**, go to Step 2.
 
@@ -24,7 +25,7 @@ You MUST ask all 3 questions below in a SINGLE AskUserQuestion call. Do NOT spli
    - "spex-teams": "Parallel implementation with spec guardian review via Agent Teams (experimental, requires: spex-gates)"
 
 2. (`multiSelect: true`, header: "Workflow"): "Which workflow extensions do you want to enable?"
-   - "spex-worktrees": "Git worktree isolation after speckit-specify (creates worktree in .claude/worktrees/)"
+   - "spex-worktrees": "Git worktree isolation: speckit-specify creates the worktree (in .claude/worktrees/) before the feature branch, so the main checkout never switches (requires the git extension)"
    - "spex-collab": "Phase-split collaboration with REVIEWERS.md for team PRs"
    - "spex-detach": "Strip spec artifacts at PR time for contributing to repos that don't use SDD"
 

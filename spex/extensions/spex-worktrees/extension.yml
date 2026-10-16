@@ -25,14 +25,28 @@ provides:
 
 # The `args` below are dropped when the specify CLI generates
 # .specify/extensions.yml, so the command also derives the action from the hook
-# it was invoked as. The action is named in `description` (which does survive)
-# to keep it visible at the call site.
+# it was invoked as (before_specify -> prepare, after_specify -> finalize,
+# before_implement -> ensure). The action is named in `description` (which does
+# survive) to keep it visible at the call site.
+#
+# before_specify runs at priority 1, ahead of the git extension's branch hook
+# (git.feature, default priority 10) and the spex flow-state hook (priority 2).
+# It creates the worktree first, so git.feature creates the branch inside the
+# worktree and the main checkout never switches branches. If an agent runs the
+# hooks in file order instead, prepare detects it (late mode) and restores the
+# main checkout before any spec content is written.
 hooks:
+  before_specify:
+    command: speckit.spex-worktrees.manage
+    args: "prepare"
+    optional: false
+    priority: 1
+    description: "Run action 'prepare': create the feature worktree before the branch and spec"
   after_specify:
     command: speckit.spex-worktrees.manage
-    args: "create"
+    args: "finalize"
     optional: false
-    description: "Run action 'create': create git worktree after specification"
+    description: "Run action 'finalize': confirm worktree, branch, feature.json and state after specification"
   before_implement:
     command: speckit.spex-worktrees.manage
     args: "ensure"
