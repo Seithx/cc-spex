@@ -429,15 +429,42 @@ install_extensions() {
   # Install in dependency order: extensions without dependencies first,
   # then extensions that depend on others (spex-deep-review, spex-teams,
   # and spex-collab require spex-gates).
+  # Every extension is installed. The enabled set is decided afterwards: the
+  # declaration is applied exactly, or (without one) the previous state is
+  # restored.
   local install_order=(spex spex-gates spex-worktrees spex-deep-review spex-teams spex-collab spex-detach)
-  # Optional extensions are installed but disabled by default.
-  # The init skill handles enable/disable via AskUserQuestion.
-  local optional_extensions=()
 
-  # Remove + add re-registers an extension as enabled. Remember which ones
-  # the user had disabled, so they can be disabled again afterwards.
   local registry=".specify/extensions/.registry" prev_disabled=""
-  prev_disabled=$(jq -r '.extensions // {} | to_entries[] | select(.value.enabled == false) | .key' "$registry" 2>/dev/null || true)
+  local profile_tool="$plugin_root/scripts/spex-setup-profile.py"
+  local apply_tool="$plugin_root/scripts/spex-apply-extensions.sh"
+  local use_declaration=false snapshot=""
+
+  # With a project declaration (.specify/spex.json), the declaration is the
+  # single source of truth: its selection is applied after reinstalling
+  # (FR-004). Snapshot the registry first so only real changes are reported.
+  if [ -f .specify/spex.json ]; then
+    local validation_error
+    if ! validation_error=$(python3 "$profile_tool" validate --root "$PWD" < .specify/spex.json 2>&1 >/dev/null); then
+      echo "${validation_error:-ERROR: invalid .specify/spex.json}" >&2
+      echo "Fix .specify/spex.json (or remove it) and run /spex:init again." >&2
+      exit 1
+    fi
+    use_declaration=true
+    if [ -f "$registry" ]; then
+      snapshot=$(mktemp "${TMPDIR:-/tmp}/spex-registry-before.XXXXXX")
+      cp "$registry" "$snapshot"
+    fi
+  else
+    # Without a declaration (FR-016): remove + add re-registers an extension
+    # as enabled. Remember which ones the user had disabled, so they can be
+    # disabled again afterwards.
+    prev_disabled=$(jq -r '.extensions // {} | to_entries[] | select(.value.enabled == false) | .key' "$registry" 2>/dev/null || true)
+  fi
+
+  # spex-detach is opt-in. Remember whether it was enabled before reinstalling
+  # (re-adding registers it as enabled).
+  local detach_before
+  detach_before=$(jq -r '.extensions["spex-detach"].enabled // "absent"' "$registry" 2>/dev/null || echo absent)
 
   local installed=0 failed=0
   for ext_id in "${install_order[@]}"; do
@@ -455,52 +482,62 @@ install_extensions() {
     fi
   done
 
-  # Prompt for optional extensions
-  for ext_id in ${optional_extensions[@]+"${optional_extensions[@]}"}; do
-    local ext_path="$extensions_dir/$ext_id"
-    [ -f "$ext_path/extension.yml" ] || continue
-
-    # Already installed — skip the prompt
-    if [ -d ".specify/extensions/$ext_id" ]; then
-      continue
-    fi
-
-    local ext_desc
-    ext_desc=$(yq -r '.extension.description // ""' "$ext_path/extension.yml" 2>/dev/null || echo "")
-
-    printf "  Enable %s? (%s) [y/N]: " "$ext_id" "$ext_desc"
-    read -r answer </dev/tty 2>/dev/null || { echo "  Skipped $ext_id (non-interactive)"; continue; }
-    case "$answer" in
-      [yY]|[yY][eE][sS])
-        if specify extension add "$ext_path" --dev; then
-          installed=$((installed + 1))
-        else
-          echo "WARNING: Failed to install extension '$ext_id'" >&2
-          failed=$((failed + 1))
-        fi
-        ;;
-      *)
-        echo "  Skipped $ext_id"
-        ;;
-    esac
-  done
-
   echo "  Extensions: $installed installed, $failed failed"
 
-  # Restore the user's disabled extensions.
-  local prev_id
-  for prev_id in $prev_disabled; do
-    if [ "$(jq -r --arg id "$prev_id" '.extensions[$id].enabled // empty' "$registry" 2>/dev/null)" = "true" ]; then
-      specify extension disable "$prev_id" >/dev/null 2>&1 ||
-        echo "WARNING: could not disable extension '$prev_id' again" >&2
+  # Keep spex-detach disabled unless it was enabled before: the declaration
+  # path enables it below when the declaration names it, so an error before
+  # that never leaves stealth mode on, and a refresh without a declaration
+  # never turns on a newly installed spex-detach.
+  if [ "$use_declaration" = true ] || [ "$detach_before" != "true" ]; then
+    if [ "$(jq -r '.extensions["spex-detach"].enabled // false' "$registry" 2>/dev/null)" = "true" ]; then
+      specify extension disable spex-detach >/dev/null 2>&1 ||
+        echo "WARNING: could not disable extension 'spex-detach'" >&2
     fi
-  done
+  fi
+
+  if [ "$use_declaration" = true ]; then
+    # Drop spex-detach from a legacy declaration that listed it while leaving
+    # it disabled (FR-023), then apply the declaration exactly.
+    if [ -n "$snapshot" ]; then
+      if ! python3 "$profile_tool" migrate-detach --root "$PWD" --before "$snapshot"; then
+        rm -f "$snapshot"
+        exit 1
+      fi
+    fi
+    local declared apply_rc=0
+    if ! declared=$(python3 "$profile_tool" resolve --root "$PWD" | jq -r '.extensions | join(",")'); then
+      rm -f "$snapshot"
+      echo "ERROR: cannot read the extension selection from .specify/spex.json" >&2
+      exit 1
+    fi
+    if [ -n "$snapshot" ]; then
+      sh "$apply_tool" --before "$snapshot" "$declared" || apply_rc=$?
+    else
+      sh "$apply_tool" "$declared" || apply_rc=$?
+    fi
+    rm -f "$snapshot"
+    if [ "$apply_rc" -ne 0 ]; then
+      echo "ERROR: could not apply the extension selection from .specify/spex.json ($declared)" >&2
+      exit 1
+    fi
+  else
+    # Restore the user's disabled extensions.
+    local prev_id
+    for prev_id in $prev_disabled; do
+      if [ "$(jq -r --arg id "$prev_id" '.extensions[$id].enabled // empty' "$registry" 2>/dev/null)" = "true" ]; then
+        specify extension disable "$prev_id" >/dev/null 2>&1 ||
+          echo "WARNING: could not disable extension '$prev_id' again" >&2
+      fi
+    done
+  fi
 
   # Enforce git extension dependency: worktrees needs git for branch creation.
   # With spex-worktrees enabled and no git extension, specify would fall back
   # to a hand-made branch in the main checkout, so refuse the setup instead.
-  # A spex-worktrees the user had disabled never triggers the refusal, even
-  # if restoring the disabled state above failed.
+  # Without a declaration, a spex-worktrees the user had disabled never
+  # triggers the refusal, even if restoring the disabled state above failed
+  # (prev_disabled is empty on the declaration path, so a declaration that
+  # enables spex-worktrees always gets the git check).
   local worktrees_enabled
   worktrees_enabled=$(jq -r '.extensions["spex-worktrees"].enabled // false' "$registry" 2>/dev/null || echo false)
   if printf '%s\n' "$prev_disabled" | grep -qxF "spex-worktrees"; then
@@ -532,14 +569,19 @@ worktrees_missing_git() {
 }
 
 # Error shown when spex-worktrees is enabled but the git extension is not.
+# The second fix changes the selection through setup (FR-019), so the project
+# declaration and the enabled extensions stay in agreement.
 worktrees_git_error() {
+  local setup_workflow
+  setup_workflow="$(cd "$(dirname "$0")/.." && pwd)/setup.yml"
   {
     echo "ERROR: spex-worktrees requires the spec-kit git extension"
     echo "The git extension creates the feature branch inside the worktree; without it the branch would be made in the main checkout."
     echo "Fix it with one of:"
-    echo "  specify extension add git      (or: specify extension enable git)"
-    echo "  specify extension disable spex-worktrees"
-    echo "Then run /spex:init again."
+    echo "  specify extension add git      (or: specify extension enable git), then run /spex:init again"
+    echo "  re-run setup with an extension selection that leaves out spex-worktrees, for example:"
+    echo "    specify workflow run \"$setup_workflow\" -i extensions=spex-gates,spex-deep-review"
+    echo "  After a direct specify workflow run, sh \"$(dirname "$setup_workflow")/scripts/spex-setup-report.sh\" prints the extension changes and errors."
   } >&2
 }
 
@@ -725,6 +767,14 @@ case "${1:-}" in
     do_clear
     ;;
   *)
+    # Tell the init skill whether a project declaration existed before this
+    # run: the setup workflow below always writes one, so the skill cannot
+    # check the file itself afterwards (FR-022).
+    if [ -f .specify/spex.json ]; then
+      echo "DECLARATION_EXISTED=true"
+    else
+      echo "DECLARATION_EXISTED=false"
+    fi
     # Delegate to setup workflow if specify CLI and setup.yml are available
     if command -v specify &>/dev/null; then
       _script_dir="$(dirname "$0")"
@@ -740,8 +790,17 @@ case "${1:-}" in
         # SPEX_SOURCE is legacy defense-in-depth; the workflow engine now
         # sets SPECKIT_WORKFLOW_DIR automatically from the YAML file path.
         _spex_root="$(cd "$_script_dir/.." && pwd)"
-        SPEX_SOURCE="$_spex_root" specify workflow run "$_setup_workflow"
-        exit $?
+        _rc=0
+        # Without a declaration, run with the defaults instead of the
+        # workflow's interactive prompts: the init skill asks the user in
+        # Step 2 and applies and persists the answer itself (FR-022).
+        set --
+        [ -f .specify/spex.json ] || set -- -i extensions=recommended -i security=safe
+        SPEX_SOURCE="$_spex_root" specify workflow run "$_setup_workflow" "$@" || _rc=$?
+        # The workflow engine keeps step messages in the run state; print the
+        # extension changes and any failed step's error (FR-018, FR-019).
+        sh "$_spex_root/scripts/spex-setup-report.sh" || true
+        exit "$_rc"
       fi
     fi
 

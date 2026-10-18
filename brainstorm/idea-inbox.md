@@ -201,3 +201,48 @@ _Review-related ideas (goal-alignment-skip-behavior, spec-completeness, platform
 - **Summary**: Using Claude Code and Codex on the same project and switching between them does not work cleanly yet: spex worktrees miss the Codex project setup, and a project declares a single harness.
 
 > `copy_config` in `spex/scripts/spex-worktree.sh` copies only `.specify/` and `.claude/` (plus in-repo symlink targets) into a new worktree. Codex keeps its project setup in `.agents/skills/` and `.codex/` (both gitignored), so a Codex session in `.claude/worktrees/<branch>` has no `$speckit-*` skills or Codex hooks unless `.claude/skills` happens to link to `.agents/skills`. `.specify/spex.json` records one `harness`, and `$cc-spex-init` now always sets it to `codex`, so switching harness means re-running setup; it is unverified whether `specify init --integration <other>` keeps the other harness's generated files or replaces them. Also unverified: whether Codex's `workspace-write` sandbox allows `git worktree add`, which writes to the main repo's `.git/worktrees/`. Directions: copy `.agents/` and `.codex/` in `copy_config`, a harness-neutral default location (`.worktrees/`, as proposed in #30), and a supported way to keep both integrations installed side by side.
+
+### repository-source-trust
+
+- **Source**: deep-review
+- **Date**: 2026-10-18
+- **Reference**: 057-codex-bundled-init
+- **Summary**: `$cc-spex-init` prefers `./spex` over the bundled plugin whenever a project looks like cc-spex, so any repository can ship its own `spex/setup.yml`.
+
+> Consider an identity check or an explicit opt-in for the repository source when working in untrusted repositories.
+
+### single-selection-orchestrator
+
+- **Source**: deep-review
+- **Date**: 2026-10-18
+- **Reference**: 057-codex-bundled-init
+- **Summary**: The snapshot, migrate, resolve, apply, persist sequence is written three times (setup.yml, spex-init.sh, init skill).
+
+> One wrapper script would keep both init paths from drifting, as already happened with the git rule.
+
+### legacy-init-path-errors
+
+- **Source**: deep-review
+- **Date**: 2026-10-18
+- **Reference**: 057-codex-bundled-init
+- **Summary**: The legacy spex-init.sh fast path (no setup.yml) silences install_extensions failures other than the git refusal.
+
+> Low impact today; keep the exit status if that path stays.
+
+### apply-before-persist-window
+
+- **Source**: deep-review
+- **Date**: 2026-10-18
+- **Reference**: 057-codex-bundled-init
+- **Summary**: A git refusal after apply-extensions leaves the new selection enabled but not persisted.
+
+> Moving the git check before apply would make every failed setup leave the previous state.
+
+### scripts-via-interpreter
+
+- **Source**: deep-review
+- **Date**: 2026-10-18
+- **Reference**: 057-codex-bundled-init
+- **Summary**: setup.yml runs some scripts directly and depends on executable bits surviving plugin cache copies.
+
+> Calling them through `python3`/`sh` removes that dependency at no cost.

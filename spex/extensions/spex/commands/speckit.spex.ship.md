@@ -42,8 +42,11 @@ DEEP_REVIEW=$(echo "$EXT_LIST" | grep -A3 '^\s*spex-deep-review$' | grep -c 'Sta
 if [ "$GATES" = "0" ] || [ "$DEEP_REVIEW" = "0" ]; then
   echo "ERROR: speckit-spex-ship requires both spex-gates and spex-deep-review extensions."
   echo ""
-  echo "Enable them with:"
-  echo "  specify extension enable spex-gates && specify extension enable spex-deep-review"
+  echo "Re-run setup with your current selection plus spex-gates and spex-deep-review:"
+  echo "  /spex:init (choose them together with the extensions you already use), or in Codex:"
+  echo "  \$cc-spex-init --extensions <current list>,spex-gates,spex-deep-review"
+  echo "  (current list: jq -r '.extensions | join(\",\")' .specify/spex.json)"
+  echo "(A manual 'specify extension enable' is reset by the next refresh, which re-applies .specify/spex.json.)"
   echo ""
   echo "Missing extensions:"
   [ "$GATES" = "0" ] && echo "  - spex-gates"
@@ -66,7 +69,9 @@ if [ "$WORKTREES_ON" = "true" ] && [ "$GIT_EXT_ON" != "true" ]; then
   echo ""
   echo "Fix it with one of:"
   echo "  specify extension add git   (or: specify extension enable git)"
-  echo "  specify extension disable spex-worktrees"
+  echo "  re-run setup with your current selection minus spex-worktrees"
+  echo "    (/spex:init, or in Codex: \$cc-spex-init --extensions <current list without spex-worktrees>;"
+  echo "    current list: jq -r '.extensions | join(\",\")' .specify/spex.json)"
 fi
 ```
 

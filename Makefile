@@ -1,4 +1,4 @@
-.PHONY: validate install uninstall reinstall check-upstream test-hook test-install test-install-remote test-setup-profile test-workflow-setup test-generated-trees test-walkthrough test-statusline test-ship-state test-worktree release migrate sync-scripts sync-scripts-check help
+.PHONY: validate install uninstall reinstall check-upstream test-hook test-install test-install-remote test-setup-profile test-codex-plugin test-apply-extensions test-workflow-setup test-generated-trees test-walkthrough test-statusline test-ship-state test-worktree release migrate sync-scripts sync-scripts-check help
 
 MARKETPLACE := spex-plugin-development
 PLUGIN := spex@$(MARKETPLACE)
@@ -16,6 +16,12 @@ test-setup-profile:
 
 test-codex-project:
 	python3 -m unittest tests/test_codex_project.py
+
+test-codex-plugin:
+	@tests/test_cc_spex_codex_plugin.sh
+
+test-apply-extensions:
+	@tests/test_apply_extensions.sh
 
 test-workflow-setup:
 	@tests/test_workflow_setup.sh
@@ -101,15 +107,17 @@ release: validate sync-scripts-check test-install
 	fi; \
 	echo "Releasing v$$VERSION..."; \
 	echo ""; \
-	echo "Updating version to $$VERSION in marketplace.json, plugin.json, setup.yml, bundle.yml, and spex/VERSION..."; \
+	echo "Updating version to $$VERSION in marketplace.json, plugin.json (Claude and Codex), setup.yml, bundle.yml, and spex/VERSION..."; \
 	tmp=$$(mktemp); \
 	jq --arg v "$$VERSION" '(.plugins[] | select(.name == "spex")).version = $$v' .claude-plugin/marketplace.json > "$$tmp" && mv "$$tmp" .claude-plugin/marketplace.json; \
 	tmp=$$(mktemp); \
 	jq --arg v "$$VERSION" '.version = $$v' spex/.claude-plugin/plugin.json > "$$tmp" && mv "$$tmp" spex/.claude-plugin/plugin.json; \
+	tmp=$$(mktemp); \
+	jq --arg v "$$VERSION" '.version = $$v' spex/.codex-plugin/plugin.json > "$$tmp" && mv "$$tmp" spex/.codex-plugin/plugin.json; \
 	sed -i.bak "s/^  version: \".*\"/  version: \"$$VERSION\"/" spex/setup.yml && rm -f spex/setup.yml.bak; \
 	sed -i.bak "s/^  version: \".*\"/  version: \"$$VERSION\"/" spex/bundle.yml && rm -f spex/bundle.yml.bak; \
 	echo "$$VERSION" > spex/VERSION; \
-	git add VERSION spex/VERSION .claude-plugin/marketplace.json spex/.claude-plugin/plugin.json spex/setup.yml spex/bundle.yml; \
+	git add VERSION spex/VERSION .claude-plugin/marketplace.json spex/.claude-plugin/plugin.json spex/.codex-plugin/plugin.json spex/setup.yml spex/bundle.yml; \
 	git commit -m "chore: bump version to $$VERSION"; \
 	echo "Creating tag v$$VERSION..."; \
 	git tag "v$$VERSION"; \
@@ -236,6 +244,8 @@ help:
 	@echo "  migrate             - Remove old sdd plugin/marketplace (run automatically by install)"
 	@echo "  test-hook           - Test the context hook"
 	@echo "  test-install        - Integration test: install from local marketplace"
+	@echo "  test-codex-plugin   - Test the bundled Codex plugin and \$$cc-spex-init bootstrap"
+	@echo "  test-apply-extensions - Test exact extension selection (spex-apply-extensions.sh)"
 	@echo "  test-install-remote - Integration test: install from GitHub marketplace"
 	@echo "  sync-scripts        - Copy canonical scripts from spex/scripts/ to extension directories"
 	@echo "  sync-scripts-check  - Verify extension scripts match canonical sources (used by release)"

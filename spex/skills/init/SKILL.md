@@ -9,10 +9,11 @@ You MUST complete ALL steps below. Do not stop after Step 1.
 
 Run the command from `<spex-init-command>` in the `<spex-context>` system reminder. This is your first and only Bash call. Do not run anything else before it.
 
+- Remember the `DECLARATION_EXISTED=true` or `DECLARATION_EXISTED=false` line from the output (printed when the command runs without flags). Step 2 needs it.
 - If output contains `NEED_INSTALL`: show output, STOP.
 - If output contains `ERROR` or the script exits with a non-zero status other than `3` (`3` means `RESTART_REQUIRED`): show the error, STOP. Do not continue to Step 2, Step 3 or the restart advice.
-  - In particular, init exits with status `1` and `ERROR: spex-worktrees requires the spec-kit git extension` when `spex-worktrees` is enabled but the `git` extension cannot be enabled. Show the message with its two fixes (`specify extension add git` / `specify extension enable git`, or `specify extension disable spex-worktrees`) and tell the user to run `/spex:init` again afterwards.
-- If the command was run with `--refresh` or `--update` and output contains `RESTART_REQUIRED`: **SKIP Steps 2 and 3.** Templates and extensions were refreshed but the existing configuration (enabled extensions, permissions) is preserved. Go directly to Step 4 and report that the refresh completed. Tell the user to restart Claude Code.
+  - In particular, init exits with status `1` and `ERROR: spex-worktrees requires the spec-kit git extension` when `spex-worktrees` is enabled but the `git` extension cannot be enabled. Show the message with its two fixes: add the git extension (`specify extension add git` / `specify extension enable git`) and run `/spex:init` again, or re-run setup with an extension selection that leaves out `spex-worktrees` (the message shows the `specify workflow run ... -i extensions=...` command). Do not tell the user to disable `spex-worktrees` by hand.
+- If the command was run with `--refresh` or `--update` and output contains `RESTART_REQUIRED`: **SKIP Steps 2 and 3.** Templates and extensions were refreshed. When the project has a declaration (`.specify/spex.json`), the refresh re-applied its extension selection exactly (extensions toggled by hand are reset, and the output names every change); without a declaration, the enabled/disabled state of the installed extensions is preserved. Permissions are unchanged. Go directly to Step 4 and report that the refresh completed, including any `Enabled:`, `Disabled:` or `Migrated:` lines from the output. Tell the user to restart Claude Code.
 - If output contains `READY` or `RESTART_REQUIRED`: **do not summarize yet**, go to Step 2.
 
 ## Step 2: Ask about extensions and permissions
@@ -36,17 +37,37 @@ You MUST ask all 3 questions below in a SINGLE AskUserQuestion call. Do NOT spli
 
 Then apply the selections:
 
-**Dependency resolution**: If the user selected `spex-teams` but NOT `spex-gates`, auto-enable `spex-gates` and warn:
-> **Note:** spex-gates was auto-enabled because spex-teams depends on it for spec guardian review.
+**Dependency resolution**: `spex-deep-review`, `spex-teams` and `spex-collab` require `spex-gates`. If the user selected any of them but NOT `spex-gates`, `spex-gates` is enabled automatically. Warn:
+> **Note:** spex-gates was auto-enabled because <extension> depends on it.
 
-**Extensions**: Extensions are already installed and enabled by the init script. For any extensions the user did NOT select (after dependency resolution), disable them:
+**Extensions**: The selection is exact: the selected extensions (plus `spex-gates` when required) are enabled, and every other optional extension is disabled. Do not run `specify extension enable` or `specify extension disable` yourself. Resolve, apply and persist the selection with the spex scripts, in this order. `<scripts>` is the directory that contains the `spex-init.sh` from `<spex-init-command>` (use its absolute path). `<csv>` is the comma-separated list of the selected extensions (empty when none was selected), and `<permissions>` is `none`, `standard` or `yolo` for the permission choice below:
 
 ```bash
-# Disable unselected extensions (ignore errors if already in desired state)
-specify extension disable <extension-name> 2>/dev/null || true
+set -e
+RESOLVED=$(python3 "<scripts>/spex-setup-profile.py" resolve --root "$PWD" \
+  --extensions "spex,<csv>" --legacy-permissions <permissions> [--harness claude])
+SELECTED=$(printf '%s' "$RESOLVED" | jq -r '.extensions | join(",")')
+sh "<scripts>/spex-apply-extensions.sh" "$SELECTED"
+case ",$SELECTED," in
+  *,spex-worktrees,*)
+    jq -e '.extensions.git.enabled == true' .specify/extensions/.registry >/dev/null 2>&1 ||
+      specify extension enable git >/dev/null 2>&1 || specify extension add git >/dev/null 2>&1 || true
+    jq -e '.extensions.git.enabled == true' .specify/extensions/.registry >/dev/null 2>&1 || {
+      echo "ERROR: spex-worktrees requires the spec-kit git extension" >&2
+      echo "Fix it with one of: specify extension add git, then run /spex:init again;" >&2
+      echo "or run /spex:init again with a selection that leaves out spex-worktrees." >&2
+      exit 1
+    } ;;
+esac
+printf '%s' "$RESOLVED" | python3 "<scripts>/spex-setup-profile.py" persist --root "$PWD"
 ```
 
-If the user selected all extensions, no action needed (all are enabled by default after init).
+Run the block as one Bash call so `set -e` stops it before `persist` when a step fails.
+
+- Pass `--harness claude` only when Step 1 printed `DECLARATION_EXISTED=false`. When it printed `DECLARATION_EXISTED=true`, leave the stored harness as it is.
+- Always start `--extensions` with `spex`, so choosing no optional extension yields only `spex`.
+- `--legacy-permissions` maps None to `safe`, Standard to `autonomous` and YOLO to `yolo` in `.specify/spex.json`.
+- If the block fails, the declaration is not written. Show the error and STOP. For `ERROR: spex-worktrees requires the spec-kit git extension`, offer the two fixes from Step 1: add the git extension and run `/spex:init` again, or choose again without `spex-worktrees`. Otherwise report the `Enabled:` / `Disabled:` lines in Step 4.
 
 **Permissions**: The `specify` CLI does not manage permissions. Instead, write permission allowlists directly to `.claude/settings.json` based on the user's choice. Use the EXACT allow arrays below (copy verbatim, do not modify or rephrase the permission strings):
 

@@ -1,0 +1,20 @@
+{
+  "name": "cc-spex",
+  "version": "6.1.0",
+  "description": "Discover and initialize Spex specification-driven workflows for Codex.",
+  "author": {
+    "name": "cc-spex maintainers"
+  },
+  "skills": "./codex/skills/",
+  "interface": {
+    "displayName": "cc-spex",
+    "shortDescription": "Initialize Spex workflows from Codex.",
+    "longDescription": "Bundles the complete Spex source (setup workflow, extensions and scripts) and adds an initialization skill that runs the Spex setup workflow from this installed plugin, without cloning or downloading anything.",
+    "developerName": "cc-spex maintainers",
+    "category": "Productivity",
+    "capabilities": [
+      "skills"
+    ],
+    "defaultPrompt": "Initialize Spex in this project."
+  }
+}

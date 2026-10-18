@@ -61,6 +61,24 @@ steps:
       fi
       printf "%s" "$SOURCE"
 
+  # Snapshot the registry before the extensions are reinstalled, so the apply
+  # step reports only real changes. On a refresh without an explicit
+  # selection, drop spex-detach from a legacy declaration that listed it while
+  # leaving it disabled (FR-023), before the declaration is read.
+  # scripts/spex-setup-report.sh prints this step's stderr by its id.
+  # Nothing has changed the registry yet, so the live registry is the state
+  # before reinstalling.
+  - id: snapshot-registry
+    type: shell
+    run: |
+      SOURCE="{{ steps.validate-source.output.stdout }}"
+      REGISTRY=".specify/extensions/.registry"
+      EXTENSIONS="{{ inputs.extensions }}"
+      if [ -z "$EXTENSIONS" ] && [ -f .specify/spex.json ] && [ -f "$REGISTRY" ]; then
+        "$SOURCE/scripts/spex-setup-profile.py" migrate-detach --root "$(pwd)" --before "$REGISTRY" || exit 1
+      fi
+      printf "ok"
+
   - id: resolve-request
     type: shell
     run: |
@@ -99,6 +117,80 @@ steps:
         printf "%s" "claude"
       fi
 
+  # The extension selection and the security choice are resolved and
+  # validated before anything is reinstalled, so an invalid input stops setup
+  # before any extension changes.
+  - id: extension-mode
+    type: shell
+    run: |
+      INPUT="{{ inputs.extensions }}"
+      if [ -n "$INPUT" ]; then
+        printf "%s" "$INPUT"
+      elif [ -f .specify/spex.json ]; then
+        printf '%s' '{{ steps.resolve-request.output.stdout }}' | jq -j '.extensions | join(",")'
+      else
+        printf "interactive"
+      fi
+
+  # Interactive mode has no workflow prompt: spec-kit's prompt step does not
+  # return the agent's reply (its output carries only the exit code), and
+  # substituting free agent text into shell source could not be made safe
+  # anyway. It applies the empty-reply fallback (recommended) and says so;
+  # the agent asks the user and passes an explicit selection instead. stdout carries no
+  # trailing newline, so consumers can match ",<list>," patterns.
+  # scripts/spex-setup-report.sh prints this step's stderr by its id.
+  - id: selected-extensions
+    type: shell
+    run: |
+      MODE="{{ steps.extension-mode.output.stdout }}"
+      SOURCE="{{ steps.validate-source.output.stdout }}"
+      case "$MODE" in
+        interactive)
+          echo "NOTE: the interactive reply cannot be read back from the agent; applying the recommended set. Re-run setup with -i extensions=NAME,NAME (or all) to choose another selection." >&2
+          set -- --mode interactive
+          ;;
+        recommended|all) set -- --mode "$MODE" ;;
+        *) set -- --extensions "spex,$MODE" ;;
+      esac
+      RESOLVED=$("$SOURCE/scripts/spex-setup-profile.py" resolve --root "$(pwd)" "$@") || exit 1
+      printf '%s' "$RESOLVED" | jq -j '.extensions | join(",")'
+
+  - id: security-mode
+    type: shell
+    run: |
+      INPUT="{{ inputs.security }}"
+      LEGACY="{{ inputs.permissions }}"
+      if [ -n "$INPUT" ]; then
+        printf "%s" "$INPUT"
+      elif [ -n "$LEGACY" ]; then
+        case "$LEGACY" in
+          none) printf "safe" ;;
+          standard) printf "autonomous" ;;
+          yolo) printf "yolo" ;;
+          *) echo "ERROR: Unknown deprecated permissions '$LEGACY'. Use none, standard, or yolo" >&2; exit 1 ;;
+        esac
+      elif [ -f .specify/spex.json ]; then
+        printf '%s' '{{ steps.resolve-request.output.stdout }}' | jq -j '.security'
+      else
+        printf "interactive"
+      fi
+
+  - id: selected-security
+    type: shell
+    run: |
+      MODE="{{ steps.security-mode.output.stdout }}"
+      if [ "$MODE" = "interactive" ]; then
+        # Same limitation as selected-extensions: the reply is not returned.
+        SELECTED="safe"
+        echo "NOTE: the interactive reply cannot be read back from the agent; applying safe. Re-run setup with -i security=autonomous or -i security=yolo to choose another level." >&2
+      else
+        SELECTED="$MODE"
+      fi
+      SELECTED=$(printf '%s' "$SELECTED" | tr -d '"[:space:]')
+      case "$SELECTED" in safe|autonomous|yolo) printf "%s" "$SELECTED" ;;
+        *) echo "ERROR: Unknown security '$SELECTED'. Use safe, autonomous, or yolo" >&2; exit 1 ;;
+      esac
+
   - id: migrate-commands
     type: shell
     run: |
@@ -123,6 +215,19 @@ steps:
       AGENT="{{ steps.detect-agent.output.stdout }}"
       specify init --here --integration "$AGENT" --script sh --force
 
+  # Keep a copy of the registry as it was before reinstalling, so
+  # apply-extensions reports only real changes (it removes the copy).
+  - id: snapshot-before-install
+    type: shell
+    run: |
+      REGISTRY=".specify/extensions/.registry"
+      SNAPSHOT=".specify/extensions/.registry.before"
+      rm -f "$SNAPSHOT"
+      if [ -f "$REGISTRY" ]; then
+        cp "$REGISTRY" "$SNAPSHOT"
+      fi
+      printf "ok"
+
   - id: install-ext-spex
     type: shell
     run: |
@@ -133,9 +238,10 @@ steps:
       if [ -d ".specify/extensions/$EXT" ]; then
         echo "y" | specify extension remove "$EXT" >/dev/null 2>&1 || true
       fi
-      DEV_FLAG=""
-      case "$SOURCE" in /tmp/*|"${TMPDIR:-/tmp}"/*) ;; *) DEV_FLAG="--dev" ;; esac
-      specify extension add "$EXT_PATH" $DEV_FLAG
+      # Always --dev: without it specify treats the path as a catalog name.
+      # --dev copies the extension into the project, so a temporary source
+      # can be deleted afterwards.
+      specify extension add "$EXT_PATH" --dev
 
   - id: install-ext-spex-gates
     type: shell
@@ -147,9 +253,10 @@ steps:
       if [ -d ".specify/extensions/$EXT" ]; then
         echo "y" | specify extension remove "$EXT" >/dev/null 2>&1 || true
       fi
-      DEV_FLAG=""
-      case "$SOURCE" in /tmp/*|"${TMPDIR:-/tmp}"/*) ;; *) DEV_FLAG="--dev" ;; esac
-      specify extension add "$EXT_PATH" $DEV_FLAG
+      # Always --dev: without it specify treats the path as a catalog name.
+      # --dev copies the extension into the project, so a temporary source
+      # can be deleted afterwards.
+      specify extension add "$EXT_PATH" --dev
 
   - id: install-ext-spex-worktrees
     type: shell
@@ -161,9 +268,10 @@ steps:
       if [ -d ".specify/extensions/$EXT" ]; then
         echo "y" | specify extension remove "$EXT" >/dev/null 2>&1 || true
       fi
-      DEV_FLAG=""
-      case "$SOURCE" in /tmp/*|"${TMPDIR:-/tmp}"/*) ;; *) DEV_FLAG="--dev" ;; esac
-      specify extension add "$EXT_PATH" $DEV_FLAG
+      # Always --dev: without it specify treats the path as a catalog name.
+      # --dev copies the extension into the project, so a temporary source
+      # can be deleted afterwards.
+      specify extension add "$EXT_PATH" --dev
 
   - id: install-ext-spex-deep-review
     type: shell
@@ -175,9 +283,10 @@ steps:
       if [ -d ".specify/extensions/$EXT" ]; then
         echo "y" | specify extension remove "$EXT" >/dev/null 2>&1 || true
       fi
-      DEV_FLAG=""
-      case "$SOURCE" in /tmp/*|"${TMPDIR:-/tmp}"/*) ;; *) DEV_FLAG="--dev" ;; esac
-      specify extension add "$EXT_PATH" $DEV_FLAG
+      # Always --dev: without it specify treats the path as a catalog name.
+      # --dev copies the extension into the project, so a temporary source
+      # can be deleted afterwards.
+      specify extension add "$EXT_PATH" --dev
 
   - id: install-ext-spex-teams
     type: shell
@@ -189,9 +298,10 @@ steps:
       if [ -d ".specify/extensions/$EXT" ]; then
         echo "y" | specify extension remove "$EXT" >/dev/null 2>&1 || true
       fi
-      DEV_FLAG=""
-      case "$SOURCE" in /tmp/*|"${TMPDIR:-/tmp}"/*) ;; *) DEV_FLAG="--dev" ;; esac
-      specify extension add "$EXT_PATH" $DEV_FLAG
+      # Always --dev: without it specify treats the path as a catalog name.
+      # --dev copies the extension into the project, so a temporary source
+      # can be deleted afterwards.
+      specify extension add "$EXT_PATH" --dev
 
   - id: install-ext-spex-collab
     type: shell
@@ -203,9 +313,10 @@ steps:
       if [ -d ".specify/extensions/$EXT" ]; then
         echo "y" | specify extension remove "$EXT" >/dev/null 2>&1 || true
       fi
-      DEV_FLAG=""
-      case "$SOURCE" in /tmp/*|"${TMPDIR:-/tmp}"/*) ;; *) DEV_FLAG="--dev" ;; esac
-      specify extension add "$EXT_PATH" $DEV_FLAG
+      # Always --dev: without it specify treats the path as a catalog name.
+      # --dev copies the extension into the project, so a temporary source
+      # can be deleted afterwards.
+      specify extension add "$EXT_PATH" --dev
 
   - id: install-ext-spex-detach
     type: shell
@@ -217,161 +328,42 @@ steps:
       if [ -d ".specify/extensions/$EXT" ]; then
         echo "y" | specify extension remove "$EXT" >/dev/null 2>&1 || true
       fi
-      DEV_FLAG=""
-      case "$SOURCE" in /tmp/*|"${TMPDIR:-/tmp}"/*) ;; *) DEV_FLAG="--dev" ;; esac
-      specify extension add "$EXT_PATH" $DEV_FLAG
-      specify extension disable "$EXT" 2>/dev/null || true
+      # Always --dev: without it specify treats the path as a catalog name.
+      # --dev copies the extension into the project, so a temporary source
+      # can be deleted afterwards.
+      specify extension add "$EXT_PATH" --dev
+      # spex-detach is opt-in: keep it disabled until apply-extensions enables
+      # it for a selection that names it, so a run that fails in between
+      # never leaves stealth mode switched on.
+      specify extension disable "$EXT" >/dev/null 2>&1 || true
 
-  - id: extension-mode
+  # Nothing is enabled or disabled here: apply-extensions enforces the list
+  # resolved by selected-extensions exactly, in every mode (FR-003).
+  # scripts/spex-setup-report.sh prints this step's stderr by its id.
+  - id: apply-extensions
     type: shell
     run: |
-      INPUT="{{ inputs.extensions }}"
-      if [ -n "$INPUT" ]; then
-        printf "%s" "$INPUT"
-      elif [ -f .specify/spex.json ]; then
-        printf '%s' '{{ steps.resolve-request.output.stdout }}' | jq -r '.extensions | join(",")'
-      else
-        printf "interactive"
-      fi
-
-  - id: select-extensions
-    type: switch
-    expression: "{{ steps.extension-mode.output.stdout }}"
-    cases:
-      recommended:
-        - id: ext-recommended-noop
-          type: shell
-          run: printf "recommended"
-      all:
-        - id: ext-all-noop
-          type: shell
-          run: printf "all"
-      interactive:
-        - id: ext-interactive-prompt
-          type: prompt
-          prompt: >-
-            The following optional spex extensions are available. Reply with a
-            comma-separated list of the extensions you want to KEEP enabled.
-            Extensions not listed will be disabled.
-
-            - spex-gates: Quality gates (spec, plan, code review)
-            - spex-worktrees: Git worktree isolation for feature branches
-            - spex-deep-review: Multi-perspective code review with 5 agents
-            - spex-teams: Parallel implementation via agent teams
-            - spex-collab: Collaborative PR workflows (reviewers, phases, triage)
-            - spex-detach: Strip spec artifacts for upstream PRs
-
-            Reply with extension names separated by commas (e.g. "spex-gates,spex-worktrees"),
-            or "all" to keep everything enabled.
-          integration: "{{ steps.detect-agent.output.stdout }}"
-        - id: ext-interactive-fallback
-          type: shell
-          run: |
-            RESPONSE="{{ steps.ext-interactive-prompt.output.stdout | default('') }}"
-            if [ -z "$RESPONSE" ] || [ "$RESPONSE" = "all" ]; then
-              echo "All extensions enabled." >&2
-              printf "ok"
-              exit 0
-            fi
-            OPTIONAL_EXTS="spex-gates spex-worktrees spex-deep-review spex-teams spex-collab spex-detach"
-            GATES_DEPENDENTS="spex-teams spex-deep-review spex-collab"
-            ENABLED_LIST=$(echo "$RESPONSE" | tr ',' ' ' | tr -d '"')
-            # Enforce gates dependency
-            gates_needed=false
-            for dep in $GATES_DEPENDENTS; do
-              for sel in $ENABLED_LIST; do
-                [ "$dep" = "$sel" ] && gates_needed=true
-              done
-            done
-            if [ "$gates_needed" = true ]; then
-              gates_in_list=false
-              for sel in $ENABLED_LIST; do
-                [ "$sel" = "spex-gates" ] && gates_in_list=true
-              done
-              if [ "$gates_in_list" = false ]; then
-                echo "Auto-enabling spex-gates (required by selected extensions)" >&2
-                ENABLED_LIST="spex-gates $ENABLED_LIST"
-              fi
-            fi
-            for ext in $OPTIONAL_EXTS; do
-              found=false
-              for sel in $ENABLED_LIST; do
-                if [ "$ext" = "$sel" ]; then found=true; break; fi
-              done
-              if [ "$found" = false ]; then
-                specify extension disable "$ext" 2>/dev/null || true
-              fi
-            done
-            echo "Extension selection applied." >&2
-            printf "ok"
-    default:
-      - id: ext-filter
-        type: shell
-        run: |
-          SELECTION="{{ steps.extension-mode.output.stdout }}"
-          OPTIONAL_EXTS="spex-gates spex-worktrees spex-deep-review spex-teams spex-collab spex-detach"
-          GATES_DEPENDENTS="spex-teams spex-deep-review spex-collab"
-          ENABLED_LIST=$(echo "$SELECTION" | tr ',' ' ')
-
-          # Enforce dependencies: if any gates-dependent is selected, auto-enable spex-gates
-          gates_needed=false
-          for dep in $GATES_DEPENDENTS; do
-            for sel in $ENABLED_LIST; do
-              if [ "$dep" = "$sel" ]; then
-                gates_needed=true
-                break
-              fi
-            done
-          done
-          if [ "$gates_needed" = true ]; then
-            gates_in_list=false
-            for sel in $ENABLED_LIST; do
-              [ "$sel" = "spex-gates" ] && gates_in_list=true
-            done
-            if [ "$gates_in_list" = false ]; then
-              echo "Auto-enabling spex-gates (required by selected extensions)" >&2
-              ENABLED_LIST="spex-gates $ENABLED_LIST"
-            fi
-          fi
-
-          # Disable extensions not in the selection
-          for ext in $OPTIONAL_EXTS; do
-            found=false
-            for sel in $ENABLED_LIST; do
-              if [ "$ext" = "$sel" ]; then
-                found=true
-                break
-              fi
-            done
-            if [ "$found" = false ]; then
-              specify extension disable "$ext" 2>/dev/null || true
-              echo "Disabled: $ext" >&2
-            fi
-          done
-          printf "ok"
-
-  - id: selected-extensions
-    type: shell
-    run: |
-      MODE="{{ steps.extension-mode.output.stdout }}"
-      case "$MODE" in
-        interactive)
-          SELECTION="{{ steps.ext-interactive-prompt.output.stdout | default('') }}"
-          SELECTION=$(printf '%s' "$SELECTION" | tr -d '"')
-          [ -n "$SELECTION" ] || SELECTION="spex-gates,spex-worktrees,spex-deep-review"
-          [ "$SELECTION" != "all" ] || SELECTION="spex-gates,spex-worktrees,spex-deep-review,spex-teams,spex-collab,spex-detach"
-          ;;
-        recommended) SELECTION="spex-gates,spex-worktrees,spex-deep-review" ;;
-        all) SELECTION="spex-gates,spex-worktrees,spex-deep-review,spex-teams,spex-collab,spex-detach" ;;
-        *) SELECTION="$MODE" ;;
-      esac
       SOURCE="{{ steps.validate-source.output.stdout }}"
-      "$SOURCE/scripts/spex-setup-profile.py" resolve --root "$(pwd)" \
-        --extensions "spex,$SELECTION" | jq -r '.extensions | join(",")'
+      SELECTED="{{ steps.selected-extensions.output.stdout }}"
+      SNAPSHOT=".specify/extensions/.registry.before"
+      if [ -f "$SNAPSHOT" ]; then
+        set -- --before "$SNAPSHOT" "$SELECTED"
+      else
+        set -- "$SELECTED"
+      fi
+      rc=0
+      sh "$SOURCE/scripts/spex-apply-extensions.sh" "$@" || rc=$?
+      rm -f "$SNAPSHOT"
+      if [ "$rc" -ne 0 ]; then
+        echo "ERROR: could not apply the extension selection ($SELECTED)" >&2
+        exit "$rc"
+      fi
+      printf "ok"
 
   - id: enforce-git-extension
     type: shell
     run: |
+      SOURCE="{{ steps.validate-source.output.stdout }}"
       SELECTED="{{ steps.selected-extensions.output.stdout }}"
       case ",$SELECTED," in
         *,spex-worktrees,*)
@@ -384,67 +376,16 @@ steps:
             echo "ERROR: spex-worktrees requires the spec-kit git extension" >&2
             echo "The git extension creates the feature branch inside the worktree; without it the branch would be made in the main checkout." >&2
             echo "Fix it with one of:" >&2
-            echo "  specify extension add git      (or: specify extension enable git)" >&2
-            echo "  specify extension disable spex-worktrees (or leave spex-worktrees out of the extension selection)" >&2
+            echo "  specify extension add git      (or: specify extension enable git), then run setup again" >&2
+            echo "  re-run setup with an extension selection that leaves out spex-worktrees, for example:" >&2
+            echo "    specify workflow run \"$SOURCE/setup.yml\" -i extensions=spex-gates,spex-deep-review" >&2
+            echo "    (Codex: \$cc-spex-init --extensions spex-gates,spex-deep-review)" >&2
+            echo "  After a direct specify workflow run, sh \"$SOURCE/scripts/spex-setup-report.sh\" prints the extension changes and errors." >&2
             exit 1
           fi
           ;;
       esac
       printf "ok"
-
-  - id: security-mode
-    type: shell
-    run: |
-      INPUT="{{ inputs.security }}"
-      LEGACY="{{ inputs.permissions }}"
-      if [ -n "$INPUT" ]; then
-        printf "%s" "$INPUT"
-      elif [ -n "$LEGACY" ]; then
-        case "$LEGACY" in
-          none) printf "safe" ;;
-          standard) printf "autonomous" ;;
-          yolo) printf "yolo" ;;
-          *) echo "ERROR: Unknown deprecated permissions '$LEGACY'. Use none, standard, or yolo" >&2; exit 1 ;;
-        esac
-      elif [ -f .specify/spex.json ]; then
-        printf '%s' '{{ steps.resolve-request.output.stdout }}' | jq -r '.security'
-      else
-        printf "interactive"
-      fi
-
-  - id: select-security
-    type: switch
-    expression: "{{ steps.security-mode.output.stdout }}"
-    cases:
-      interactive:
-        - id: security-interactive-prompt
-          type: prompt
-          prompt: >-
-            Select requested project security. Safe (recommended) preserves the
-            host policy. Autonomous reduces prompts for enumerated Spex project
-            operations. YOLO requests unrestricted filesystem and network access
-            without approval prompts. Reply: safe, autonomous, or yolo.
-          integration: "{{ steps.detect-agent.output.stdout }}"
-    default:
-      - id: security-noop
-        type: shell
-        run: printf "ok"
-
-  - id: selected-security
-    type: shell
-    run: |
-      MODE="{{ steps.security-mode.output.stdout }}"
-      if [ "$MODE" = "interactive" ]; then
-        SELECTED="{{ steps.security-interactive-prompt.output.stdout | default('safe') }}"
-        SELECTED=$(printf '%s' "$SELECTED" | tr -d '"[:space:]')
-        [ -n "$SELECTED" ] || SELECTED="safe"
-      else
-        SELECTED="$MODE"
-      fi
-      SELECTED=$(printf '%s' "$SELECTED" | tr -d '"[:space:]')
-      case "$SELECTED" in safe|autonomous|yolo) printf "%s" "$SELECTED" ;;
-        *) echo "ERROR: Unknown security '$SELECTED'. Use safe, autonomous, or yolo" >&2; exit 1 ;;
-      esac
 
   - id: persist-request
     type: shell

@@ -60,3 +60,321 @@ if find "$TEST_REPO" "$CODEX_REPO" -maxdepth 2 -type d -name '*materializ*' | gr
 fi
 
 echo "PASS: workflow setup persists intent, migrates legacy permissions, propagates Codex refusal, and refreshes without materialization"
+
+# --- Helpers for the cases below -------------------------------------------
+
+SCRATCH_RAW="$(mktemp -d "${TMPDIR:-/tmp}/spex-workflow-cases.XXXXXX")" || exit 1
+SCRATCH="$(cd "$SCRATCH_RAW" && pwd -P)" || exit 1
+[ -n "$SCRATCH" ] && [ -d "$SCRATCH" ] && [ "$SCRATCH" != "$(pwd -P)" ] || { echo "cannot create a temporary directory" >&2; exit 1; }
+TMP_COPY=""
+trap 'rm -rf -- "$TEST_REPO" "$LEGACY_REPO" "$CODEX_REPO" "$SCRATCH" ${TMP_COPY:+"$TMP_COPY"}' EXIT
+ALL_SPEX_EXTENSIONS="spex spex-gates spex-worktrees spex-deep-review spex-teams spex-collab spex-detach"
+OPTIONAL_SPEX_EXTENSIONS="spex-gates spex-worktrees spex-deep-review spex-teams spex-collab spex-detach"
+
+fail() {
+  echo "FAIL: $*" >&2
+  exit 1
+}
+
+# new_project <name>: prints the path of a fresh git project under SCRATCH.
+new_project() {
+  local dir="$SCRATCH/$1"
+  mkdir -p "$dir"
+  git -C "$dir" init -q
+  printf '%s' "$dir"
+}
+
+# setup_in <project> <source> [-i k=v ...]: runs the setup workflow from
+# <source> inside <project>. Prints the workflow JSON on stdout; stderr goes
+# to <project>.log. Returns the workflow exit code.
+setup_in() {
+  local project="$1" source="$2"
+  shift 2
+  [ -n "$project" ] && [ -d "$project" ] || fail "project directory missing: $project"
+  (
+    cd "$project" || exit 1
+    SPEX_SOURCE="$source" specify workflow run "$source/setup.yml" --json "$@"
+  ) 2> "$project.log"
+}
+
+# enabled_optional <project>: comma-separated optional spex extensions that
+# the registry shows enabled, in canonical order.
+enabled_optional() {
+  local registry="$1/.specify/extensions/.registry" ext result=""
+  for ext in $OPTIONAL_SPEX_EXTENSIONS; do
+    if jq -e --arg id "$ext" '.extensions[$id].enabled == true' "$registry" >/dev/null 2>&1; then
+      result="${result:+$result,}$ext"
+    fi
+  done
+  printf '%s' "$result"
+}
+
+# declared_optional <project>: optional extensions in .specify/spex.json.
+declared_optional() {
+  jq -r '[.extensions[] | select(. != "spex")] | join(",")' "$1/.specify/spex.json"
+}
+
+assert_completed() {
+  jq -e '.status == "completed"' <<<"$2" >/dev/null ||
+    fail "$1: workflow did not complete: $(jq -c '{status, current_step_id}' <<<"$2" 2>/dev/null || printf '%s' "$2")"
+}
+
+assert_enabled() {
+  local desc="$1" project="$2" expected="$3" actual
+  actual="$(enabled_optional "$project")"
+  [ "$actual" = "$expected" ] || fail "$desc: enabled '$actual', expected '$expected'"
+  [ "$(declared_optional "$project")" = "$actual" ] ||
+    fail "$desc: declaration '$(declared_optional "$project")' differs from enabled '$actual'"
+}
+
+# --- US2: setup from a temporary source (FR-001, FR-002) --------------------
+
+# tmp_source_case <label> <TMPDIR value>
+tmp_source_case() {
+  local label="$1" tmpdir="$2" copy project out ext dangling
+  mkdir -p "$tmpdir"
+  # Build the path exactly like "${TMPDIR:-/tmp}/..." does. With a macOS-style
+  # TMPDIR that ends in a slash this yields ".../T//spex-src-*", the shape the
+  # old temp-path exception matched (and then installed without --dev).
+  copy="$(TMPDIR="$tmpdir" mktemp -d "$tmpdir/spex-src-XXXXXX")"
+  TMP_COPY="$copy"
+  case "$copy" in "$tmpdir"/spex-src-*) ;; *) fail "$label: copy not under $tmpdir: $copy" ;; esac
+  cp -R "$REPO_ROOT/spex/." "$copy/"
+  project="$(new_project "tmp-source-$label")"
+
+  out="$(TMPDIR="$tmpdir" setup_in "$project" "$copy" \
+    -i integration=claude -i extensions=recommended -i security=safe)" ||
+    fail "$label: setup from $copy failed: $(cat "$project.log")"
+  assert_completed "$label" "$out"
+  for ext in $ALL_SPEX_EXTENSIONS; do
+    [ -f "$project/.specify/extensions/$ext/extension.yml" ] ||
+      fail "$label: extension $ext not installed from $copy"
+  done
+
+  rm -rf -- "$copy"
+  TMP_COPY=""
+  for ext in $ALL_SPEX_EXTENSIONS; do
+    [ -f "$project/.specify/extensions/$ext/extension.yml" ] ||
+      fail "$label: extension $ext gone after deleting the source"
+  done
+  ls "$project"/.claude/skills/speckit-spex-*/SKILL.md >/dev/null 2>&1 ||
+    fail "$label: no generated spex command skills"
+  dangling="$(find "$project/.claude" "$project/.specify" -type l ! -exec test -e {} \; -print)"
+  [ -z "$dangling" ] || fail "$label: dangling symlinks after deleting the source: $dangling"
+  if find "$project/.claude" "$project/.specify" -type l -exec readlink {} \; | grep -qF "$copy"; then
+    fail "$label: symlinks still point into the deleted source $copy"
+  fi
+  echo "PASS: setup from a source under $label installs all 7 extensions and survives deleting it"
+}
+
+tmp_source_case "tmp" "/tmp"
+tmp_source_case "macos-tmpdir" "$SCRATCH/var/folders/xx/T/"
+
+# --- US3: the selection is exactly what ends up enabled (FR-003 to FR-005) --
+
+SRC="$REPO_ROOT/spex"
+RECOMMENDED_SET="spex-gates,spex-worktrees,spex-deep-review"
+ALL_SET="spex-gates,spex-worktrees,spex-deep-review,spex-teams,spex-collab"
+
+# run_case <desc> <project> [-i k=v ...]: runs setup and stores the run's
+# output in RUN_OUTPUT: stdout, stderr, and the step messages that the
+# workflow engine keeps in the run state (printed by spex-setup-report.sh,
+# which is how the bootstrap and spex-init.sh surface them).
+run_case() {
+  local desc="$1" project="$2" out run_id report
+  shift 2
+  out="$(setup_in "$project" "$SRC" "$@")" || fail "$desc: setup failed: $(cat "$project.log")"
+  assert_completed "$desc" "$out"
+  run_id="$(jq -r '.run_id' <<<"$out")"
+  report="$(cd "$project" && sh "$SRC/scripts/spex-setup-report.sh" "$run_id" 2>&1)"
+  for leftover in .specify/extensions/.registry.before .specify/.spex-extensions-reply .specify/.spex-security-reply; do
+    [ ! -e "$project/$leftover" ] || fail "$desc: $leftover left behind"
+  done
+  RUN_OUTPUT="$out
+$(cat "$project.log")
+$report"
+}
+
+profile_hash() {
+  shasum -a 256 "$1/.specify/spex.json" | awk '{print $1}'
+}
+
+# recommended, then a refresh without input
+rec="$(new_project select-recommended)"
+run_case "recommended" "$rec" -i integration=claude -i extensions=recommended -i security=safe
+assert_enabled "recommended" "$rec" "$RECOMMENDED_SET"
+rec_hash="$(profile_hash "$rec")"
+run_case "refresh after recommended" "$rec"
+assert_enabled "refresh after recommended" "$rec" "$RECOMMENDED_SET"
+[ "$(profile_hash "$rec")" = "$rec_hash" ] || fail "refresh after recommended changed .specify/spex.json"
+echo "PASS: recommended enables exactly gates, worktrees, deep-review; a refresh re-applies it unchanged"
+
+# An invalid selection stops setup before anything is changed.
+rec_registry="$(shasum -a 256 "$rec/.specify/extensions/.registry" | awk '{print $1}')"
+bad_out="$(setup_in "$rec" "$SRC" -i extensions=spex-gates,spex-bogus)" && fail "invalid selection: setup succeeded"
+jq -e '.status == "failed"' <<<"$bad_out" >/dev/null || fail "invalid selection: unexpected result $bad_out"
+[ "$(shasum -a 256 "$rec/.specify/extensions/.registry" | awk '{print $1}')" = "$rec_registry" ] ||
+  fail "invalid selection: the registry changed"
+[ "$(profile_hash "$rec")" = "$rec_hash" ] || fail "invalid selection: .specify/spex.json changed"
+[ ! -e "$rec/.specify/extensions/.registry.before" ] || fail "invalid selection: registry snapshot left behind"
+bad_report="$(cd "$rec" && sh "$SRC/scripts/spex-setup-report.sh" "$(jq -r '.run_id' <<<"$bad_out")" 2>&1)"
+printf '%s' "$bad_report" | grep -qF "spex-bogus" || fail "invalid selection: the unknown name is not reported: $bad_report"
+echo "PASS: an invalid explicit selection stops setup (resolve-request) with the unknown name and leaves the project unchanged"
+
+# explicit list with a dependency
+teams="$(new_project select-teams)"
+run_case "explicit spex-teams" "$teams" -i integration=claude -i extensions=spex-teams -i security=safe
+assert_enabled "explicit spex-teams" "$teams" "spex-gates,spex-teams"
+echo "PASS: an explicit list enables only the listed extensions plus spex-gates"
+
+# all, then a legacy declaration with spex-detach, then recommended
+all="$(new_project select-all)"
+run_case "all" "$all" -i integration=claude -i extensions=all -i security=safe
+assert_enabled "all" "$all" "$ALL_SET"
+echo "PASS: all enables every optional extension except spex-detach"
+
+# Simulate a declaration written by an earlier `all` run (spex-detach listed
+# while the registry has it disabled).
+jq '.extensions += ["spex-detach"]' "$all/.specify/spex.json" > "$all/.specify/spex.json.new"
+mv "$all/.specify/spex.json.new" "$all/.specify/spex.json"
+jq -e '.extensions["spex-detach"].enabled == false' "$all/.specify/extensions/.registry" >/dev/null ||
+  fail "legacy fixture: spex-detach should be disabled before the refresh"
+run_case "legacy spex-detach refresh" "$all"
+jq -e '.extensions["spex-detach"].enabled == false' "$all/.specify/extensions/.registry" >/dev/null ||
+  fail "legacy refresh enabled spex-detach"
+jq -e '.extensions | index("spex-detach") == null' "$all/.specify/spex.json" >/dev/null ||
+  fail "legacy refresh kept spex-detach in .specify/spex.json"
+printf '%s' "$RUN_OUTPUT" | grep -qF "Migrated:" || fail "legacy refresh did not report the migration: $RUN_OUTPUT"
+assert_enabled "legacy spex-detach refresh" "$all" "$ALL_SET"
+echo "PASS: a legacy declaration drops spex-detach instead of enabling it, and says so"
+
+run_case "all then recommended" "$all" -i extensions=recommended
+assert_enabled "all then recommended" "$all" "$RECOMMENDED_SET"
+for ext in spex-teams spex-collab; do
+  printf '%s' "$RUN_OUTPUT" | grep -qF "Disabled: $ext" || fail "all then recommended: no 'Disabled: $ext' in output: $RUN_OUTPUT"
+done
+echo "PASS: switching from all to recommended disables teams and collab and names both"
+
+# spex-worktrees as the last selected extension still gets the git extension
+# (the selection is matched as ",<list>,", so it must carry no newline).
+wt="$(new_project select-worktrees-last)"
+run_case "gates and worktrees" "$wt" -i integration=claude -i extensions=spex-gates,spex-worktrees -i security=safe
+assert_enabled "gates and worktrees" "$wt" "spex-gates,spex-worktrees"
+jq -e '.extensions.git.enabled == true' "$wt/.specify/extensions/.registry" >/dev/null ||
+  fail "gates and worktrees: the git extension was not enabled for spex-worktrees"
+echo "PASS: selecting spex-worktrees last still enables the git extension"
+
+# Without an obtainable git extension, setup stops with the FR-019 guidance.
+REAL_SPECIFY="$(command -v specify)"
+NOGIT_BIN="$SCRATCH/nogit-bin"
+mkdir -p "$NOGIT_BIN"
+cat > "$NOGIT_BIN/specify" <<STUB
+#!/usr/bin/env bash
+case "\${1:-} \${2:-} \${3:-}" in
+  "extension add git"|"extension enable git")
+    echo "git extension unavailable in this test" >&2
+    exit 1 ;;
+esac
+exec "$REAL_SPECIFY" "\$@"
+STUB
+chmod +x "$NOGIT_BIN/specify"
+nogit="$(new_project worktrees-without-git)"
+nogit_out="$(PATH="$NOGIT_BIN:$PATH" setup_in "$nogit" "$SRC" \
+  -i integration=claude -i extensions=spex-gates,spex-worktrees -i security=safe)" &&
+  fail "worktrees without git: setup succeeded"
+jq -e '.status == "failed" and .current_step_id == "enforce-git-extension"' <<<"$nogit_out" >/dev/null ||
+  fail "worktrees without git: unexpected result $nogit_out"
+nogit_report="$(cd "$nogit" && sh "$SRC/scripts/spex-setup-report.sh" "$(jq -r '.run_id' <<<"$nogit_out")" 2>&1)"
+printf '%s' "$nogit_report" | grep -qF "spex-worktrees requires the spec-kit git extension" ||
+  fail "worktrees without git: no error in the report: $nogit_report"
+printf '%s' "$nogit_report" | grep -qF "leaves out spex-worktrees" ||
+  fail "worktrees without git: no FR-019 guidance in the report: $nogit_report"
+if printf '%s' "$nogit_report" | grep -qF "extension disable spex-worktrees"; then
+  fail "worktrees without git: the report suggests disabling spex-worktrees by hand"
+fi
+[ ! -e "$nogit/.specify/spex.json" ] || fail "worktrees without git: a declaration was written"
+echo "PASS: without the git extension, setup stops before persisting and prints the FR-019 guidance"
+
+# --- US1: $cc-spex-init from a bundled plugin copy without network (SC-001) --
+
+PLUGIN_COPY="$SCRATCH/codex-cache/cc-spex/current"
+mkdir -p "$PLUGIN_COPY"
+cp -R "$REPO_ROOT/spex/." "$PLUGIN_COPY/"
+NET_BIN="$SCRATCH/net-bin"
+NET_LOG="$SCRATCH/network.log"
+CODEX_TMP="$SCRATCH/codex-tmp"
+mkdir -p "$NET_BIN" "$CODEX_TMP"
+: > "$NET_LOG"
+REAL_GIT="$(command -v git)"
+cat > "$NET_BIN/git" <<STUB
+#!/usr/bin/env bash
+# Skip git's global options so "git -C dir clone" is caught as well; the
+# original arguments are kept for the real git.
+original=("\$@")
+while [ "\$#" -gt 0 ]; do
+  case "\$1" in
+    -C|-c|--git-dir|--work-tree|--namespace|--exec-path) shift 2 ;;
+    -*) shift ;;
+    *) break ;;
+  esac
+done
+case "\${1:-}" in
+  clone|fetch|ls-remote)
+    printf 'git %s\n' "\${original[*]}" >> "$NET_LOG"
+    echo "network disabled in tests" >&2
+    exit 128 ;;
+esac
+exec "$REAL_GIT" "\${original[@]}"
+STUB
+cat > "$NET_BIN/curl" <<STUB
+#!/usr/bin/env bash
+printf 'curl %s\n' "\$*" >> "$NET_LOG"
+exit 7
+STUB
+chmod +x "$NET_BIN/git" "$NET_BIN/curl"
+
+codex="$(new_project codex-bundled)"
+[ ! -e "$codex/spex" ] || fail "codex project must not look like the cc-spex repository"
+codex_out="$(
+  cd "$codex" || exit 1
+  env -u SPEX_SOURCE TMPDIR="$CODEX_TMP" PATH="$NET_BIN:$PATH" \
+    sh "$PLUGIN_COPY/codex/skills/cc-spex-init/scripts/bootstrap.sh" 2> "$codex.log"
+)" || fail "bundled bootstrap failed: $(cat "$codex.log")"
+assert_completed "bundled bootstrap" "$codex_out"
+grep -qF "bundled source $PLUGIN_COPY" "$codex.log" || fail "bootstrap did not use the bundled plugin copy: $(cat "$codex.log")"
+assert_enabled "bundled bootstrap" "$codex" "$RECOMMENDED_SET"
+jq -e '.harness == "codex" and .security == "safe"' "$codex/.specify/spex.json" >/dev/null ||
+  fail "bundled bootstrap: declaration is not harness=codex, security=safe: $(cat "$codex/.specify/spex.json")"
+if grep '^git ' "$NET_LOG"; then
+  fail "bundled bootstrap tried a git network call"
+fi
+# The only allowed curl call is the release check; nothing may download spex.
+if grep '^curl' "$NET_LOG" | grep -v 'api.github.com/repos/rhuss/cc-spex/releases/latest' | grep -q .; then
+  fail "bundled bootstrap made an unexpected download: $(cat "$NET_LOG")"
+fi
+if find "$CODEX_TMP" -maxdepth 1 -name 'cc-spex-init-*' 2>/dev/null | grep -q .; then
+  fail "bundled bootstrap created a cc-spex-init-* directory"
+fi
+echo "PASS: \$cc-spex-init runs setup from a bundled plugin copy without fetching spex (recommended set, harness codex)"
+
+# US3 scenario 7: a project initialized with all and autonomous keeps both
+# when $cc-spex-init runs again without arguments.
+s7="$(new_project codex-all-autonomous)"
+(
+  cd "$s7" || exit 1
+  env -u SPEX_SOURCE TMPDIR="$CODEX_TMP" PATH="$NET_BIN:$PATH" \
+    sh "$PLUGIN_COPY/codex/skills/cc-spex-init/scripts/bootstrap.sh" --extensions all --security autonomous
+) > "$s7.out" 2> "$s7.log" || fail "all/autonomous bootstrap failed: $(cat "$s7.log")"
+assert_enabled "all/autonomous bootstrap" "$s7" "$ALL_SET"
+(
+  cd "$s7" || exit 1
+  env -u SPEX_SOURCE TMPDIR="$CODEX_TMP" PATH="$NET_BIN:$PATH" \
+    sh "$PLUGIN_COPY/codex/skills/cc-spex-init/scripts/bootstrap.sh"
+) > "$s7.out" 2> "$s7.log" || fail "bootstrap refresh failed: $(cat "$s7.log")"
+assert_completed "bootstrap refresh" "$(cat "$s7.out")"
+assert_enabled "bootstrap refresh" "$s7" "$ALL_SET"
+jq -e '.harness == "codex" and .security == "autonomous"' "$s7/.specify/spex.json" >/dev/null ||
+  fail "bootstrap refresh: declaration is not harness=codex, security=autonomous: $(cat "$s7/.specify/spex.json")"
+grep -qF "security=autonomous (from .specify/spex.json)" "$s7.log" ||
+  fail "bootstrap refresh: the stored security level was not named: $(cat "$s7.log")"
+echo "PASS: \$cc-spex-init without arguments keeps the all selection and autonomous security"

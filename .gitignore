@@ -87,6 +87,13 @@ specs/**/.walkthrough/
 **/.codex/
 **/.mcp.json
 **/.agents/
+# Exception: the committed Codex marketplace (FR-013). Everything else
+# under .agents/ stays ignored.
+!/.agents/
+/.agents/*
+!/.agents/plugins/
+/.agents/plugins/*
+!/.agents/plugins/marketplace.json
 **/.beads/
 **/.style/
 **/.specify/**

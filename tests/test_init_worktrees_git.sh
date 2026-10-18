@@ -50,13 +50,20 @@ assert_not_contains() {
   fi
 }
 
-# make_project <worktrees-enabled: true|false> <git-available: yes|no>
+# make_project <worktrees-enabled: true|false> <git-available: yes|no> [extra registry entries]
+# The optional third argument is a JSON object of id -> enabled merged into
+# the registry, for example '{"spex-teams": false}'.
 make_project() {
   cleanup
-  TMPROOT=$(cd "$(mktemp -d)" && pwd -P)
+  local raw
+  raw=$(mktemp -d) || exit 1
+  TMPROOT=$(cd "$raw" && pwd -P) || exit 1
+  [ -n "$TMPROOT" ] && [ -d "$TMPROOT" ] && [ "$TMPROOT" != "$(pwd -P)" ] || { echo "cannot create a temporary directory" >&2; exit 1; }
   PROJ="$TMPROOT/proj"
   mkdir -p "$PROJ/.specify/extensions" "$TMPROOT/bin"
-  jq -n --argjson wt "$1" '{schema_version: "1.0", extensions: {"spex-worktrees": {enabled: $wt}, "spex": {enabled: true}}}' \
+  jq -n --argjson wt "$1" --argjson extra "${3:-"{}"}" '{schema_version: "1.0", extensions: (
+    {"spex-worktrees": {enabled: $wt}, "spex": {enabled: true}} +
+    ($extra | with_entries(.value = {enabled: .value})))}' \
     > "$PROJ/.specify/extensions/.registry"
   echo "$2" > "$TMPROOT/git-available"
 
@@ -64,6 +71,7 @@ make_project() {
 #!/usr/bin/env bash
 REG=".specify/extensions/.registry"
 GIT_OK=$(cat "$STUB_ROOT/git-available")
+printf '%s\n' "$*" >> "$STUB_ROOT/specify-calls.log"
 set_enabled() {
   jq --arg id "$1" --argjson v "$2" '.extensions[$id] = ((.extensions[$id] // {}) + {enabled: $v})' "$REG" > "$REG.tmp" && mv "$REG.tmp" "$REG"
 }
@@ -97,7 +105,17 @@ run_refresh() {
   # directory), and never with the real specify CLI.
   [ -n "${PROJ:-}" ] && [ -d "$PROJ/.specify" ] || { echo "fixture missing" >&2; exit 1; }
   [ "$(PATH="$TMPROOT/bin:$PATH" command -v specify)" = "$TMPROOT/bin/specify" ] || { echo "specify stub not first on PATH" >&2; exit 1; }
-  OUT=$(cd "$PROJ" && STUB_ROOT="$TMPROOT" PATH="$TMPROOT/bin:$PATH" bash "$INIT_SCRIPT" --refresh 2>&1) || RC=$?
+  mkdir -p "$TMPROOT/tmp"
+  OUT=$(cd "$PROJ" && STUB_ROOT="$TMPROOT" TMPDIR="$TMPROOT/tmp" PATH="$TMPROOT/bin:$PATH" bash "$INIT_SCRIPT" --refresh 2>&1) || RC=$?
+}
+
+# run_default: spex-init.sh without flags (delegates to the stubbed setup
+# workflow). Sets RC and OUT.
+run_default() {
+  RC=0
+  [ -n "${PROJ:-}" ] && [ -d "$PROJ/.specify" ] || { echo "fixture missing" >&2; exit 1; }
+  [ "$(PATH="$TMPROOT/bin:$PATH" command -v specify)" = "$TMPROOT/bin/specify" ] || { echo "specify stub not first on PATH" >&2; exit 1; }
+  OUT=$(cd "$PROJ" && STUB_ROOT="$TMPROOT" TMPDIR="$TMPROOT/tmp" PATH="$TMPROOT/bin:$PATH" bash "$INIT_SCRIPT" 2>&1) || RC=$?
 }
 
 registry_enabled() {
@@ -110,7 +128,9 @@ run_refresh
 assert_eq "exit code 1" "1" "$RC"
 assert_contains "names the missing git extension" "ERROR: spex-worktrees requires the spec-kit git extension" "$OUT"
 assert_contains "remedy: add git" "specify extension add git" "$OUT"
-assert_contains "remedy: disable spex-worktrees" "specify extension disable spex-worktrees" "$OUT"
+assert_contains "remedy: re-run setup without spex-worktrees" "re-run setup with an extension selection that leaves out spex-worktrees" "$OUT"
+assert_contains "remedy names the setup command" "specify workflow run" "$OUT"
+assert_not_contains "old remedy is gone" "specify extension disable spex-worktrees" "$OUT"
 assert_not_contains "no restart advice" "RESTART_REQUIRED" "$OUT"
 
 echo "Test: refresh enables git when spex-worktrees is enabled and git is available"
@@ -126,6 +146,108 @@ run_refresh
 assert_eq "exit code 3 (restart required)" "3" "$RC"
 assert_not_contains "no error" "ERROR:" "$OUT"
 assert_eq "spex-worktrees stays disabled" "false" "$(registry_enabled spex-worktrees)"
+
+# write_declaration <comma-separated extensions>
+write_declaration() {
+  jq -n --arg exts "$1" '{schema_version: 1, harness: "claude", extensions: ($exts | split(",")), security: "safe"}' \
+    > "$PROJ/.specify/spex.json"
+}
+
+declared() {
+  jq -r '.extensions | join(",")' "$PROJ/.specify/spex.json"
+}
+
+echo "Test: refresh with a declaration re-applies it (FR-004)"
+# spex-teams was enabled by hand outside the declaration; spex-gates is in
+# the declaration but was disabled by hand.
+make_project true yes '{"git": true, "spex-gates": false, "spex-teams": true, "spex-collab": false}'
+write_declaration "spex,spex-gates,spex-worktrees"
+run_refresh
+assert_eq "exit code 3 (restart required)" "3" "$RC"
+assert_not_contains "no error" "ERROR:" "$OUT"
+assert_eq "spex-teams disabled again" "false" "$(registry_enabled spex-teams)"
+assert_eq "spex-gates enabled again" "true" "$(registry_enabled spex-gates)"
+assert_eq "spex-worktrees enabled" "true" "$(registry_enabled spex-worktrees)"
+assert_eq "spex-deep-review disabled" "false" "$(registry_enabled spex-deep-review)"
+assert_eq "spex-detach disabled" "false" "$(registry_enabled spex-detach)"
+assert_contains "reports Disabled: spex-teams" "Disabled: spex-teams" "$OUT"
+assert_contains "reports Enabled: spex-gates" "Enabled: spex-gates" "$OUT"
+assert_not_contains "collab was already disabled" "Disabled: spex-collab" "$OUT"
+assert_eq "declaration unchanged" "spex,spex-gates,spex-worktrees" "$(declared)"
+
+echo "Test: refresh with a declaration enabling spex-worktrees still requires git"
+make_project false no '{"spex-gates": true}'
+write_declaration "spex,spex-gates,spex-worktrees"
+run_refresh
+assert_eq "exit code 1" "1" "$RC"
+assert_contains "names the missing git extension" "ERROR: spex-worktrees requires the spec-kit git extension" "$OUT"
+
+echo "Test: refresh with a legacy declaration drops spex-detach (FR-023)"
+make_project false no '{"spex-gates": true, "spex-detach": false}'
+write_declaration "spex,spex-gates,spex-detach"
+run_refresh
+assert_eq "exit code 3 (restart required)" "3" "$RC"
+assert_eq "spex-detach stays disabled" "false" "$(registry_enabled spex-detach)"
+assert_eq "spex-detach removed from the declaration" "spex,spex-gates" "$(declared)"
+assert_contains "reports the migration" "Migrated:" "$OUT"
+
+echo "Test: refresh with a declaration that selects an enabled spex-detach keeps it"
+make_project false no '{"spex-gates": true, "spex-detach": true}'
+write_declaration "spex,spex-gates,spex-detach"
+run_refresh
+assert_eq "exit code 3 (restart required)" "3" "$RC"
+assert_eq "spex-detach enabled" "true" "$(registry_enabled spex-detach)"
+assert_eq "declaration unchanged" "spex,spex-gates,spex-detach" "$(declared)"
+assert_not_contains "no migration" "Migrated:" "$OUT"
+
+echo "Test: refresh with an invalid declaration stops with the validator message"
+make_project false no '{"spex-gates": true}'
+printf '%s\n' '{"schema_version": 1, "harness": "nope", "extensions": ["spex"], "security": "safe"}' > "$PROJ/.specify/spex.json"
+run_refresh
+assert_eq "exit code 1" "1" "$RC"
+assert_contains "validator message" "harness must be" "$OUT"
+
+echo "Test: refresh without a declaration keeps disabled extensions disabled (FR-016)"
+make_project false no '{"spex-gates": true, "spex-teams": false, "spex-collab": true}'
+run_refresh
+assert_eq "exit code 3 (restart required)" "3" "$RC"
+assert_eq "spex-teams stays disabled" "false" "$(registry_enabled spex-teams)"
+assert_eq "spex-collab stays enabled" "true" "$(registry_enabled spex-collab)"
+assert_eq "spex-worktrees stays disabled" "false" "$(registry_enabled spex-worktrees)"
+assert_eq "no declaration written" "no" "$([ -f "$PROJ/.specify/spex.json" ] && echo yes || echo no)"
+
+echo "Test: refresh without a declaration keeps a newly installed spex-detach disabled"
+make_project false no '{"spex-gates": true}'
+run_refresh
+assert_eq "exit code 3 (restart required)" "3" "$RC"
+assert_eq "spex-detach installed but disabled" "false" "$(registry_enabled spex-detach)"
+
+echo "Test: refresh without a declaration keeps an enabled spex-detach enabled (FR-016)"
+make_project false no '{"spex-gates": true, "spex-detach": true}'
+run_refresh
+assert_eq "exit code 3 (restart required)" "3" "$RC"
+assert_eq "spex-detach stays enabled" "true" "$(registry_enabled spex-detach)"
+
+echo "Test: the registry snapshot of a declaration refresh is removed"
+make_project false no '{"spex-gates": true}'
+printf '%s\n' '{"schema_version": 1, "harness": "claude", "extensions": ["spex", "spex-gates"], "security": "safe"}' > "$PROJ/.specify/spex.json"
+run_refresh
+assert_eq "exit code 3 (restart required)" "3" "$RC"
+assert_eq "no snapshot left in TMPDIR" "" "$(ls -A "$TMPROOT/tmp")"
+
+echo "Test: init reports whether a declaration existed before the setup run (FR-022)"
+make_project false no '{"spex-gates": true}'
+run_default
+assert_eq "exit code 0" "0" "$RC"
+assert_contains "no declaration yet" "DECLARATION_EXISTED=false" "$OUT"
+assert_contains "defaults passed instead of workflow prompts" "-i extensions=recommended -i security=safe" "$(grep '^workflow run' "$TMPROOT/specify-calls.log")"
+: > "$TMPROOT/specify-calls.log"
+printf '%s\n' '{"schema_version": 1, "harness": "codex", "extensions": ["spex"], "security": "safe"}' > "$PROJ/.specify/spex.json"
+run_default
+assert_eq "exit code 0" "0" "$RC"
+assert_contains "declaration present" "DECLARATION_EXISTED=true" "$OUT"
+assert_not_contains "never both" "DECLARATION_EXISTED=false" "$OUT"
+assert_not_contains "no inputs with a declaration" " -i " "$(grep '^workflow run' "$TMPROOT/specify-calls.log")"
 
 echo ""
 echo "Results: $PASS passed, $FAIL failed"

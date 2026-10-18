@@ -168,12 +168,27 @@ spex EXTENSIONS (quality gates for spec-kit commands)
 spex COMMANDS (helpers and configuration)
 
   /spex:init                  Initialize spec-kit + configure extensions and permissions
-                                --refresh: update templates without reconfiguring
+                                Writes the choice to .specify/spex.json
+                                --refresh: update templates; re-applies .specify/spex.json
+                                           when present (else keeps extension state)
                                 --update: upgrade specify CLI and refresh
                                 --clear: reset status line state
                                 6.x: delegates to setup.yml workflow when specify >= 0.7.4
                                      Any harness: specify workflow run spex/setup.yml
                                      Inputs: -i "integration=auto" -i "extensions=all"
+                                Selections are exact: selected extensions are enabled,
+                                all other optional spex extensions are disabled.
+                                "all" = every extension except spex-detach (name it to
+                                enable it). Setup names every extension it changed
+                                (after a direct workflow run:
+                                sh spex/scripts/spex-setup-report.sh).
+  $cc-spex-init               Codex: install or refresh spex from the Spex source bundled
+                                with the cc-spex Codex plugin (no clone, no download)
+                                --extensions recommended|all|interactive|NAME,NAME
+                                --security safe|autonomous|yolo|interactive
+                                --integration codex|claude|opencode|auto (default codex)
+                                Defaults (recommended, safe) apply only without
+                                .specify/spex.json; otherwise the stored choice is reused
   /speckit-spex-worktrees-manage  List active worktrees, finish, or cleanup merged ones
   /speckit-spex-brainstorm    Rough idea into formal spec (interactive dialogue)
                                 Checks brainstorm/idea-inbox.md for review seeds
@@ -246,6 +261,9 @@ CLOSING OUT A FEATURE (after review passes)
   Extensions are managed via the specify CLI:
     specify extension enable <name>    Enable an extension
     specify extension disable <name>   Disable an extension
+  Manual toggles do not update .specify/spex.json and are reset on the next
+  refresh. To change the selection, re-run setup with -i "extensions=..."
+  (or $cc-spex-init --extensions ... in Codex).
 
 
 IDEA INBOX (brainstorm/idea-inbox.md)
@@ -301,6 +319,7 @@ MULTI-AGENT SUPPORT
 
   spex works across Claude Code, Codex CLI, and OpenCode.
   Unified setup: specify workflow run spex/setup.yml
+  Codex plugin:  $cc-spex-init (runs setup from the bundled spex source)
   Enforcement adapts to each agent's hook API.
 
   Agent detection priority:

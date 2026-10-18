@@ -194,7 +194,55 @@ make install
 /spex:init
 ```
 
-This runs Spec-Kit's `specify init`, installs seven bundled extensions (six enabled by default, spex-detach opt-in), and configures permissions. After initialization, extension hooks fire automatically at spec-kit lifecycle boundaries.
+This runs Spec-Kit's `specify init`, installs the seven bundled extensions, enables exactly the ones you select (the recommended set is spex-gates, spex-worktrees and spex-deep-review; spex-detach is always opt-in), records the choice in `.specify/spex.json`, and configures permissions. After initialization, extension hooks fire automatically at spec-kit lifecycle boundaries.
+
+### Codex
+
+The `spex/` directory is also a Codex plugin (`cc-spex`). It bundles the complete spex source, so `$cc-spex-init` initializes a project from the installed plugin. Nothing is cloned or downloaded, and the installed extensions always match the plugin version.
+
+Prerequisites: the `specify` CLI, `jq` and `python3` on `PATH`.
+
+```bash
+# Add the cc-spex marketplace from this repository (once)
+codex plugin marketplace add rhuss/cc-spex --ref main
+
+# Install the plugin
+codex plugin add cc-spex@cc-spex
+```
+
+Then, in a Codex session inside your project:
+
+```text
+$cc-spex-init
+$cc-spex-init --extensions all --security autonomous
+$cc-spex-init --extensions spex-gates,spex-teams
+```
+
+| Option | Values | Default |
+|--------|--------|---------|
+| `--integration` | `codex`, `claude`, `opencode`, `auto` | `codex` |
+| `--extensions` | `recommended`, `all`, `interactive`, or `NAME,NAME` | `recommended` |
+| `--security` | `safe`, `autonomous`, `yolo`, `interactive` | `safe` |
+
+The `--extensions` and `--security` defaults apply only to a project without `.specify/spex.json`. When the declaration exists, `$cc-spex-init` without options re-applies the stored selection and security unchanged (it names the stored security level before it runs); pass an option to change it. `$cc-spex-init` always sets the declaration's `harness` to `codex`. The `interactive` values currently apply `recommended` and `safe` with a notice, because spec-kit's prompt step does not return the reply; pass an explicit list or level instead. The spex source is taken from `SPEX_SOURCE` when set, from `./spex` when you run it inside the cc-spex repository, and from the installed plugin otherwise. Start a new Codex session after init so the generated `$speckit-*` skills are discovered, then try `$speckit-spex-help`.
+
+To update later, run `codex plugin marketplace upgrade cc-spex` and re-run `$cc-spex-init` in your projects.
+
+#### Migrating from the thin cc-spex plugin
+
+Earlier Codex installs (`0.1.0+codex.*`) contained only the init skill and cloned GitHub `main` into a temporary directory on every run. The bundled plugin uses the same identity (`cc-spex` in the `cc-spex` marketplace), so it replaces the thin plugin:
+
+- **Marketplace that tracks `main` of this repository**: update the marketplace (`codex plugin marketplace upgrade cc-spex`). Codex then lists one `cc-spex` plugin at the bundled version.
+- **Marketplace from a local path, or from a checkout of the `050-cc-spex-plugin` branch**: updates through that marketplace stop working once the branch is gone. Remove the old plugin and marketplace, then add the marketplace from `main`:
+
+  ```bash
+  codex plugin remove cc-spex@cc-spex
+  codex plugin marketplace remove cc-spex
+  codex plugin marketplace add rhuss/cc-spex --ref main
+  codex plugin add cc-spex@cc-spex
+  ```
+
+Check with `codex plugin list` that exactly one `cc-spex` plugin is installed. Afterwards `$cc-spex-init` no longer clones anything.
 
 ### Workflow-Based Setup (6.x)
 
@@ -246,6 +294,31 @@ network access. YOLO instead writes `sandbox_mode = "danger-full-access"` with
 `approval_policy = "never"`, allowing unrestricted filesystem and network access
 without prompts. Setup refuses conflicting user-owned permission selectors
 rather than replacing them.
+
+**Extension selection is exact.** In every mode the selected optional extensions
+are enabled and all other optional spex extensions are disabled; extensions spex
+does not ship (such as the spec-kit `git` extension) are never disabled:
+
+| `extensions` input | Enabled optional extensions |
+|--------------------|-----------------------------|
+| `recommended` | spex-gates, spex-worktrees, spex-deep-review |
+| `all` | every optional extension except spex-detach |
+| `NAME,NAME` | the listed ones, plus spex-gates for spex-deep-review, spex-teams or spex-collab |
+| `interactive` | your reply (`all` behaves like `all` mode, an empty reply like `recommended`) |
+| empty (refresh) | the selection stored in `.specify/spex.json` |
+
+spex-detach (stealth mode) is enabled only when you name it. Selecting
+spex-worktrees also enables the spec-kit `git` extension. A refresh re-applies
+the declaration, so every setup run ends with the enabled extensions matching
+`.specify/spex.json`, and setup names each extension whose state it changed
+(`Enabled: ...` / `Disabled: ...`). `specify workflow run` keeps step messages
+in the run state instead of printing them; `$cc-spex-init` and `/spex:init` print
+them for you, and after a direct run `sh spex/scripts/spex-setup-report.sh` (from
+the project root, with the path to your spex checkout) shows the changes and the
+error of a failed step. A declaration written by an earlier `all`
+run that lists spex-detach while it is disabled is migrated once: spex-detach is
+removed from the declaration (reported as `Migrated: ...`) instead of being
+enabled.
 
 The former `permissions` workflow input remains available as a deprecated alias:
 `none` maps to `safe`, `standard` maps to `autonomous`, and `yolo` remains
@@ -308,11 +381,25 @@ The gate checks: value mismatches (spec says `5%`, code says `10%`), missing con
 
 ```bash
 specify extension list                    # Show installed extensions and status
-specify extension disable spex-teams      # Disable an extension
-specify extension enable spex-teams       # Re-enable an extension
+specify extension disable spex-teams      # Disable an extension (until the next refresh)
+specify extension enable spex-teams       # Re-enable an extension (until the next refresh)
 ```
 
-Extension state is tracked in `.specify/extensions/.registry`.
+Extension state is tracked in `.specify/extensions/.registry`. spex cannot see
+manual `specify extension` toggles, so they do not update `.specify/spex.json`.
+In a project with a declaration, the next refresh (setup without inputs,
+`$cc-spex-init`, or `/spex:init --refresh`) resets manually toggled spex
+extensions to the declared selection and names each change. To change the
+selection for good, re-run setup with it:
+
+```bash
+specify workflow run spex/setup.yml -i "extensions=spex-gates,spex-teams"   # or recommended / all
+$cc-spex-init --extensions spex-gates,spex-teams                            # in Codex
+/spex:init                                                                  # in Claude Code: choose again
+```
+
+Projects without `.specify/spex.json` keep the earlier `/spex:init --refresh`
+behavior: the enabled/disabled state of installed extensions is preserved.
 
 ## Commands Reference
 
@@ -324,6 +411,7 @@ Codex invokes generated skills with `$` (for example, `$speckit-plan`).
 | Command | Purpose |
 |---------|---------|
 | `specify workflow run spex/setup.yml` | Install or refresh Spex for the selected harness |
+| `$cc-spex-init` | Codex: install or refresh Spex from the bundled cc-spex plugin (no clone) |
 | `/speckit-specify` | Define requirements and create a formal spec |
 | `/speckit-plan` | Generate an implementation plan from a spec |
 | `/speckit-tasks` | Create actionable tasks from a plan |
@@ -630,6 +718,8 @@ All `/speckit-*` commands remain unchanged.
 ```bash
 make validate          # Validate plugin and marketplace schemas
 make test-codex-project  # Test Codex guidance, security profiles, and linked worktrees
+make test-codex-plugin   # Test the bundled Codex plugin and $cc-spex-init bootstrap
+make test-apply-extensions  # Test exact extension selection
 make test-install      # Integration test: install from local marketplace
 make test-install-remote  # Integration test: install from GitHub marketplace
 make release           # Full release: validate, update marketplace.json, tag, push, bump to dev
@@ -638,7 +728,7 @@ make release           # Full release: validate, update marketplace.json, tag, p
 The release process is fully automated via `make release`:
 
 1. Reads the version from `VERSION` (must not be a `-dev` version)
-2. Updates `.claude-plugin/marketplace.json` with the version
+2. Sets that version in `.claude-plugin/marketplace.json`, `spex/.claude-plugin/plugin.json`, the Codex manifest `spex/.codex-plugin/plugin.json`, `spex/setup.yml`, `spex/bundle.yml` and `spex/VERSION` (the Codex marketplace entry in `.agents/plugins/marketplace.json` has no version field; Codex reads it from the manifest)
 3. Commits, creates a git tag `vX.Y.Z`, and pushes
 4. Creates a GitHub release with auto-generated notes
 5. Bumps `VERSION` to the next dev version (`X.Y.{Z+1}-dev`), commits, and pushes

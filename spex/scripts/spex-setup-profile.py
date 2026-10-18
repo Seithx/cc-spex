@@ -32,6 +32,19 @@ DEFAULT = {
 }
 LEGACY_SECURITY = {"none": "safe", "standard": "autonomous", "yolo": "yolo"}
 FIELDS = set(DEFAULT)
+# Optional extensions per selection mode. `all` leaves out spex-detach, which
+# is opt-in and enabled only when named explicitly.
+MODES = {
+    "recommended": ["spex-gates", "spex-worktrees", "spex-deep-review"],
+    "all": [
+        "spex-gates", "spex-worktrees", "spex-deep-review",
+        "spex-teams", "spex-collab",
+    ],
+}
+MIGRATED_DETACH = (
+    "Migrated: removed spex-detach from .specify/spex.json "
+    "(it was disabled; select it explicitly to enable it)"
+)
 
 
 class ProfileError(Exception):
@@ -60,8 +73,11 @@ def normalize_extensions(value: Any) -> list[str]:
 
     if not isinstance(value, list) or not value:
         fail("extensions must be a nonempty array")
-    if any(not isinstance(item, str) or item not in EXTENSIONS for item in value):
+    if any(not isinstance(item, str) for item in value):
         fail("extensions contains an unknown extension")
+    unknown = [item for item in value if item not in EXTENSIONS]
+    if unknown:
+        fail(f"extensions contains an unknown extension: {', '.join(unknown)}")
     enabled = set(value)
     if "spex" not in enabled:
         fail("extensions must include spex")
@@ -132,31 +148,54 @@ def parse_extension_argument(raw: str) -> list[str]:
     return [item.strip() for item in raw.split(",") if item.strip()]
 
 
+def mode_extensions(mode: str, reply: str) -> list[str]:
+    """Map a selection mode (and an interactive reply) to optional extensions."""
+
+    if mode != "interactive":
+        return list(MODES[mode])
+    # Agents often quote names or wrap them in backticks; names never contain
+    # quotes or whitespace, so both act as separators like commas.
+    answer = reply
+    for quote in ('"', "'", "`"):
+        answer = answer.replace(quote, " ")
+    names = answer.replace(",", " ").split()
+    if not names:
+        return list(MODES["recommended"])
+    if len(names) == 1 and names[0].lower() == "all":
+        return list(MODES["all"])
+    return names
+
+
 def resolve(args: argparse.Namespace) -> None:
     """Resolve explicit inputs over stored values and defaults."""
 
+    if args.mode and args.extensions:
+        fail("--mode and --extensions are mutually exclusive")
+    if args.reply and args.mode != "interactive":
+        fail("--reply requires --mode interactive")
     root = root_path(args.root)
     stored = load(root) or DEFAULT
     security = args.security
     if not security and args.legacy_permissions:
         security = LEGACY_SECURITY[args.legacy_permissions]
+    if args.mode:
+        extensions = ["spex", *mode_extensions(args.mode, args.reply)]
+    elif args.extensions:
+        extensions = ["spex", *parse_extension_argument(args.extensions)]
+    else:
+        extensions = stored["extensions"]
     candidate = {
         "schema_version": 1,
         "harness": args.harness or stored["harness"],
-        "extensions": (
-            ["spex", *parse_extension_argument(args.extensions)]
-            if args.extensions else stored["extensions"]
-        ),
+        "extensions": extensions,
         "security": security or stored["security"],
     }
     emit(validate(candidate))
 
 
-def persist(args: argparse.Namespace) -> None:
-    """Atomically persist a validated declaration below the project root."""
+def write_atomic(root: Path, value: dict[str, Any]) -> None:
+    """Atomically write a validated declaration below the project root."""
 
-    root = root_path(args.root)
-    value = validate(read_json(sys.stdin))
     destination = root / PROFILE
     destination.parent.mkdir(parents=True, exist_ok=True)
     descriptor, raw_temporary = tempfile.mkstemp(
@@ -173,7 +212,58 @@ def persist(args: argparse.Namespace) -> None:
     except Exception:
         temporary.unlink(missing_ok=True)
         raise
+
+
+def persist(args: argparse.Namespace) -> None:
+    """Atomically persist a validated declaration below the project root."""
+
+    root = root_path(args.root)
+    value = validate(read_json(sys.stdin))
+    write_atomic(root, value)
     emit(value)
+
+
+def snapshot_disabled(path: Path, extension: str) -> bool:
+    """Return True when a registry snapshot shows the extension disabled."""
+
+    try:
+        with path.open(encoding="utf-8") as stream:
+            registry = json.load(stream)
+    except (OSError, json.JSONDecodeError):
+        return False
+    if not isinstance(registry, dict):
+        return False
+    entries = registry.get("extensions")
+    if not isinstance(entries, dict):
+        return False
+    entry = entries.get(extension)
+    return isinstance(entry, dict) and entry.get("enabled") is False
+
+
+def migrate_detach(args: argparse.Namespace) -> None:
+    """Drop spex-detach from a legacy declaration when it was left disabled.
+
+    Earlier `all` runs listed spex-detach in the declaration while leaving the
+    extension disabled. Applying such a declaration would switch stealth mode
+    on, so the entry is removed instead and the removal is reported.
+    """
+
+    try:
+        root = root_path(args.root)
+    except ProfileError as error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        raise SystemExit(2) from error
+    stored = load(root)
+    if stored is None or "spex-detach" not in stored["extensions"]:
+        return
+    if not snapshot_disabled(Path(args.before), "spex-detach"):
+        return
+    migrated = {
+        **stored,
+        "extensions": [e for e in stored["extensions"] if e != "spex-detach"],
+    }
+    write_atomic(root, validate(migrated))
+    print(MIGRATED_DETACH, file=sys.stderr)
 
 
 def validate_command(args: argparse.Namespace) -> None:
@@ -192,6 +282,10 @@ def parser() -> argparse.ArgumentParser:
     resolve_parser.add_argument("--root", required=True)
     resolve_parser.add_argument("--harness", choices=sorted(HARNESSES), default="")
     resolve_parser.add_argument("--extensions", default="")
+    resolve_parser.add_argument(
+        "--mode", choices=["recommended", "all", "interactive"], default=""
+    )
+    resolve_parser.add_argument("--reply", default="")
     resolve_parser.add_argument("--security", choices=sorted(SECURITY), default="")
     resolve_parser.add_argument(
         "--legacy-permissions", choices=sorted(LEGACY_SECURITY), default=""
@@ -203,6 +297,10 @@ def parser() -> argparse.ArgumentParser:
     validate_parser = commands.add_parser("validate")
     validate_parser.add_argument("--root", required=True)
     validate_parser.set_defaults(handler=validate_command)
+    migrate_parser = commands.add_parser("migrate-detach")
+    migrate_parser.add_argument("--root", required=True)
+    migrate_parser.add_argument("--before", required=True)
+    migrate_parser.set_defaults(handler=migrate_detach)
     return result
 
 

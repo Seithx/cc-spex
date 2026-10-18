@@ -1,9 +1,11 @@
 <!-- Sync Impact Report
-Version: 2.0.0 → 2.1.0 (MINOR: add state management principle)
-Added sections:
-  - VII. State as Scripts
+Version: 2.1.0 → 2.1.1 (PATCH: record the dual-harness plugin root)
+Added sections: none
 Modified sections:
-  - Version bump to 2.1.0
+  - Plugin Architecture Constraints: spex/ is both the Claude Code and the
+    Codex plugin root, Codex skills live in spex/codex/skills/, the release
+    sets the Codex manifest version, extensions install with --dev from any
+    source location
 Follow-up TODOs: none
 -->
 
@@ -146,9 +148,22 @@ These constraints govern the structure of the spex plugin codebase.
   Canonical scripts live in `spex/scripts/` and are synced to
   extension directories via `make sync-scripts`. Hooks live in
   `spex/scripts/hooks/`.
-- **Extension installation**: The `spex-init.sh` script installs
-  all bundled extensions from `spex/extensions/` using
-  `specify extension add <path> --dev`.
+- **Extension installation**: The `spex-init.sh` script and the
+  setup workflow (`spex/setup.yml`) install all bundled extensions
+  from `spex/extensions/` using `specify extension add <path> --dev`,
+  regardless of where the source tree lives (checkout, temporary
+  directory, plugin cache).
+- **Dual-harness plugin root**: `spex/` is both the Claude Code
+  plugin (`spex/.claude-plugin/plugin.json`) and the Codex plugin
+  `cc-spex` (`spex/.codex-plugin/plugin.json`, published through
+  `.agents/plugins/marketplace.json`). The Codex plugin bundles the
+  whole spex source, and its init skill runs the setup workflow from
+  the installed tree; it never clones or downloads spex. Codex skills
+  live in `spex/codex/skills/` (only `cc-spex-init`), so Claude-only
+  skills under `spex/skills/` are not exposed to Codex.
+- **Release versions**: `make release` sets the same release version
+  in the Claude Code manifests, the Codex manifest
+  (`spex/.codex-plugin/plugin.json`) and the setup workflow.
 - **No compiled artifacts**: This plugin consists entirely of Markdown
   and Bash. There are no compiled binaries or package dependencies
   beyond `jq` and the `specify` CLI. The only build step is
@@ -200,4 +215,4 @@ Implementation plans SHOULD include a "Constitution Check" section.
 - **Compliance reviews** happen during `spex:review-spec` and
   `spex:review-plan` invocations when those gates are used.
 
-**Version**: 2.1.0 | **Ratified**: 2026-02-13 | **Last Amended**: 2026-05-07
+**Version**: 2.1.1 | **Ratified**: 2026-02-13 | **Last Amended**: 2026-10-18

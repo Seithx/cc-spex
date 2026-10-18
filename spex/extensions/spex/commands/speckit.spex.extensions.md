@@ -28,6 +28,10 @@ specify extension list
 
 Display the output to the user.
 
+## Persistence note (enable and disable)
+
+When the project has a declaration (`.specify/spex.json`), it is the source of truth for the optional spex extensions. A manual `specify extension enable` or `disable` lasts only until the next refresh (`/spex:init --refresh`, `$cc-spex-init`, or a setup workflow run without an explicit selection), which re-applies the declaration. Tell the user this when you enable or disable a spex extension. One exception: disabling `spex-detach` by hand while the declaration lists it removes it from the declaration at the next refresh (legacy migration, FR-023), so that disable sticks; re-run setup naming `spex-detach` to keep it. To change the selection permanently, re-run setup with an explicit selection (`/spex:init`, `$cc-spex-init --extensions NAME,NAME`, or `specify workflow run <spex source>/setup.yml -i extensions=NAME,NAME`, where the spex source is `spex/` in the cc-spex repository or the installed plugin directory), which updates the declaration.
+
 ## Subcommand: Enable
 
 Run via Bash:

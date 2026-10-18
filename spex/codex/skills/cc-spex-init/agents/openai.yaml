@@ -1,0 +1,4 @@
+interface:
+  display_name: "Initialize Spex"
+  short_description: "Install or refresh Spex workflows in this project from the bundled source"
+  default_prompt: "Initialize Spex in this project."
