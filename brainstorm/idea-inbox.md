@@ -192,3 +192,12 @@ _Review-related ideas (goal-alignment-skip-behavior, spec-completeness, platform
 - **Summary**: The hook-order window for worktree-first specify only closes for good when spec-kit dispatches hooks by priority.
 
 > Follow up on specs/056-worktree-with-branch/upstream-proposal.md once upstream answers, then drop late mode if possible.
+
+### codex-claude-shared-worktrees
+
+- **Source**: conversation
+- **Date**: 2026-10-18
+- **Reference**: [#30](https://github.com/rhuss/cc-spex/issues/30), 056-worktree-with-branch, 057-codex-bundled-init
+- **Summary**: Using Claude Code and Codex on the same project and switching between them does not work cleanly yet: spex worktrees miss the Codex project setup, and a project declares a single harness.
+
+> `copy_config` in `spex/scripts/spex-worktree.sh` copies only `.specify/` and `.claude/` (plus in-repo symlink targets) into a new worktree. Codex keeps its project setup in `.agents/skills/` and `.codex/` (both gitignored), so a Codex session in `.claude/worktrees/<branch>` has no `$speckit-*` skills or Codex hooks unless `.claude/skills` happens to link to `.agents/skills`. `.specify/spex.json` records one `harness`, and `$cc-spex-init` now always sets it to `codex`, so switching harness means re-running setup; it is unverified whether `specify init --integration <other>` keeps the other harness's generated files or replaces them. Also unverified: whether Codex's `workspace-write` sandbox allows `git worktree add`, which writes to the main repo's `.git/worktrees/`. Directions: copy `.agents/` and `.codex/` in `copy_config`, a harness-neutral default location (`.worktrees/`, as proposed in #30), and a supported way to keep both integrations installed side by side.
