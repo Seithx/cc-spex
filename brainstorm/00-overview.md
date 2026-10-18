@@ -1,6 +1,6 @@
 # Brainstorm Overview
 
-Last updated: 2026-10-13
+Last updated: 2026-10-18
 
 ## Sessions
 
@@ -24,6 +24,7 @@ Last updated: 2026-10-13
 | 47 | 2026-10-09 | guided-walkthrough-pair-testing (supersedes #43) | ready for spec | - | - |
 | 48 | 2026-10-11 | walkthrough-runbook | ready for spec | 054 | - |
 | 49 | 2026-10-13 | merge-stamp-finish | active | - | - |
+| 50 | 2026-10-18 | codex-bundled-init | active | - | [#58](https://github.com/rhuss/cc-spex/issues/58) |
 
 ## Open Threads
 
@@ -89,6 +90,10 @@ Last updated: 2026-10-13
 - "Already verified" in finish: per session or per commit? (from #49)
 - Should finish work on the default branch with no feature branch? (from #49)
 - Reconcile the 054 walkthrough spec drift before or as part of this change? (from #49)
+- Can a Codex plugin manifest point `skills` at a subdirectory, and how does the bootstrap resolve its plugin root? (from #50)
+- Should manual `specify extension enable/disable` update `.specify/spex.json`? (from #50)
+- One rule for exact selection vs keeping manually disabled extensions across `spex-init.sh` and `setup.yml`? (from #50)
+- Do Claude-only files in the Codex plugin cache cause Codex warnings? (from #50)
 
 ## Parked Ideas
 
